@@ -14,4 +14,4 @@ Après la première ouverture, l'appli fonctionne sans réseau.
 
 ---
 
-Ce dépôt ne contient que la version publiée (fichiers générés). Polices : Barlow et Barlow Condensed (SIL Open Font License).
+Ce dépôt ne contient que la version publiée : des fichiers générés par `outils/construire.js` depuis le dépôt source (privé). Polices : Barlow et Barlow Condensed (SIL Open Font License).

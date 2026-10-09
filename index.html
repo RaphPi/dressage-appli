@@ -378,6 +378,7 @@ dialog::backdrop { background: rgba(5, 10, 20, 0.6); }
   .mini { width: 170px; }
   .fiche-lettres { font-size: 40px; }
 }
+
 </style>
 </head>
 <body>
@@ -431,840 +432,921 @@ dialog::backdrop { background: rgba(5, 10, 20, 0.6); }
 <script>
 (() => {
   'use strict';
+const modules = {};
+const require = (nom) => modules[nom];
+// moteur/lecture.js (partagé avec Node)
+modules["./lecture"] = (function () {
+const module = { exports: {} };
+'use strict';
+// Lecture du tracé compilé d'un paquet : position, chronologie, arrêts, chemins SVG.
+// Partagé : utilisé dans le navigateur par l'appli (intégré au paquet par outils/construire.js) et dans Node par les tests.
+// Aucune géométrie ici : le tracé a été figé par le moteur, on ne fait que le parcourir.
+// T : le tracé du paquet (paquet.trace).
 
-  // ———————————————— Erreurs visibles (utile pour tester sur un appareil)
-  const bandeau = document.getElementById('erreur');
-  const signaler = (m) => { bandeau.hidden = false; bandeau.textContent = 'Erreur : ' + m; };
-  window.addEventListener('error', (e) => signaler(e.message || 'inconnue'));
-  window.addEventListener('unhandledrejection', (e) => signaler(String(e.reason)));
+const r2 = (v) => Math.round(v * 100) / 100;
 
-  document.getElementById('sans-js').remove();
-  const app = document.getElementById('app');
-  app.hidden = false;
+// Point du tracé à l'abscisse s (en mètres), par interpolation entre les points échantillonnés.
+// Les points sont espacés de T.ds, sauf le dernier, placé exactement en fin de tracé (intervalle plus court).
+function point(T, s) {
+  const sc = Math.max(0, Math.min(s, T.total));
+  const f = sc / T.ds;
+  const i = Math.max(0, Math.min(Math.floor(f), T.pts.length - 2));
+  let u = Math.max(0, Math.min(1, f - i));
+  if (i === T.pts.length - 2) { const reste = T.total - i * T.ds; u = reste > 0 ? Math.max(0, Math.min(1, (sc - i * T.ds) / reste)) : 1; }
+  const a = T.pts[i], b = T.pts[i + 1];
+  return [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u];
+}
 
-  // Pas de zoom au pincement sur iPhone (en plus du viewport et de touch-action, que Safari n'applique pas toujours).
-  ['gesturestart', 'gesturechange', 'gestureend'].forEach((t) => document.addEventListener(t, (e) => e.preventDefault(), { passive: false }));
-  document.addEventListener('touchmove', (e) => { if (e.scale !== undefined && e.scale !== 1) e.preventDefault(); }, { passive: false });
+// Chemin SVG (attribut d) du tracé entre les abscisses s0 et s1.
+function chemin(T, s0, s1) {
+  const out = [point(T, s0)];
+  for (let i = Math.floor(s0 / T.ds) + 1; i * T.ds < s1 && i < T.pts.length; i++) out.push(T.pts[i]);
+  out.push(point(T, s1));
+  return 'M' + out.map((p) => r2(p[0]) + ' ' + r2(p[1])).join('L');
+}
 
-  // ———————————————— 1. Stockage sur l'appareil (jamais dans le paquet)
-  const lire = (cle, def) => { try { const v = localStorage.getItem(cle); return v == null ? def : JSON.parse(v); } catch (e) { return def; } };
-  const ecrire = (cle, v) => { try { localStorage.setItem(cle, JSON.stringify(v)); return true; } catch (e) { return false; } };
-  const VIDE = () => ({ notes: {}, ressentis: {}, quiz: {}, etoiles: 0, jours: [], suiteQuiz: 0 });
-  const REG = Object.assign({ prenom: '', theme: 'auto', courante: '' }, lire('dressage:reglages', {}));
-  const sauverReglages = () => ecrire('dressage:reglages', REG);
-  const OUV = (Number(lire('dressage:ouvertures', 0)) || 0) + 1;
-  const STOCKAGE_OK = ecrire('dressage:ouvertures', OUV) && Number(lire('dressage:ouvertures', 0)) === OUV;
-
-  // ———————————————— 2. Deux usages du même code :
-  // « paquet » = fichier .html qui contient sa reprise ; « appli » = appli installée qui importe des paquets.
-  const BLOC = document.getElementById('reprise-dressage').textContent.trim();
-  const MODE = BLOC ? 'paquet' : 'appli';
-  let PAQUETS = {};
-  if (MODE === 'paquet') { const p = JSON.parse(BLOC); PAQUETS[p.id] = p; }
-  else { const l = lire('dressage:paquets', {}); PAQUETS = l && typeof l === 'object' ? l : {}; }
-  const enregistrerPaquets = () => (MODE === 'appli' ? ecrire('dressage:paquets', PAQUETS) : true);
-  const IOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
-  const INSTALLEE = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
-
-  const THEME_URL = new URLSearchParams(location.search).get('theme');
-  const appliquerTheme = () => { document.documentElement.dataset.theme = THEME_URL || REG.theme || 'auto'; };
-  appliquerTheme();
-
-  // ———————————————— 3. La reprise courante (tout est recalculé quand on en change)
-  let P = null, T = null, VB = [-5, -5, 30, 70], RATIO = 30 / 70, PTS = [], DS = 0.5;
-  let LETTRES = {}, FIGS = [], GEO = [], NB_NOTEES = 0, ARRETS = {}, PLAQUES = [], CENTRE = [];
-  let FANTOME = '', TOUT = '', CRANS = '', QUESTIONS = [], CLE = '', D = VIDE();
-  const sauver = () => (CLE ? ecrire(CLE, D) : false);
-  // Deux onglets ouverts sur la même reprise : on reprend les données de l'autre avant d'écrire à notre tour.
-  window.addEventListener('storage', (e) => { if (CLE && e.key === CLE && e.newValue) { try { D = Object.assign(VIDE(), JSON.parse(e.newValue)); } catch (err) { /* valeur illisible : on garde la nôtre */ } } });
-  let minuterie = 0;
-  const sauverBientot = () => { clearTimeout(minuterie); minuterie = setTimeout(sauver, 300); };
-
-  const ptAt = (s) => {
-    const f = Math.max(0, Math.min(s, T.total)) / DS;
-    const i = Math.max(0, Math.min(Math.floor(f), PTS.length - 2));
-    const u = Math.max(0, Math.min(1, f - i));
-    const a = PTS[i], b = PTS[i + 1];
-    return [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u];
-  };
-  const r2 = (v) => Math.round(v * 100) / 100;
-  const trace = (s0, s1) => {
-    const out = [ptAt(s0)];
-    for (let i = Math.floor(s0 / DS) + 1; i * DS < s1 && i < PTS.length; i++) out.push(PTS[i]);
-    out.push(ptAt(s1));
-    return 'M' + out.map((p) => r2(p[0]) + ' ' + r2(p[1])).join('L');
-  };
-  const sAt = (t) => {
-    const k = T.cles;
-    if (t <= 0) return 0;
-    for (let i = 1; i < k.length; i++) {
-      if (t <= k[i][0]) {
-        const t0 = k[i - 1][0], s0 = k[i - 1][1], t1 = k[i][0], s1 = k[i][1];
-        return t1 > t0 ? s0 + (s1 - s0) * (t - t0) / (t1 - t0) : s1;
-      }
-    }
-    return T.total;
-  };
-  const tAt = (s) => {
-    const k = T.cles;
-    for (let i = 1; i < k.length; i++) {
+// Abscisse atteinte à l'instant t (secondes, en temps réel), d'après les images clés [t, s].
+function abscisse(T, t) {
+  const k = T.cles;
+  if (t <= 0) return 0;
+  for (let i = 1; i < k.length; i++) {
+    if (t <= k[i][0]) {
       const t0 = k[i - 1][0], s0 = k[i - 1][1], t1 = k[i][0], s1 = k[i][1];
-      if (s <= s1 && s1 > s0) return t0 + (t1 - t0) * Math.max(0, s - s0) / (s1 - s0);
+      return t1 > t0 ? s0 + (s1 - s0) * (t - t0) / (t1 - t0) : s1;
     }
-    return T.duree;
-  };
-  const enArret = (t) => {
-    const k = T.cles;
-    for (let i = 1; i < k.length; i++) if (t >= k[i - 1][0] && t < k[i][0]) return k[i][1] === k[i - 1][1];
-    return false;
-  };
-  const lettresDe = (f) => {
-    const set = {};
-    f.lignes.forEach((ln) => (ln[0].match(/[A-Z]+/g) || []).forEach((w) => w.split('').forEach((c) => { if (LETTRES[c]) set[c] = true; })));
-    return set;
-  };
-  const geoIndex = (s) => { for (let i = 0; i < GEO.length; i++) if (s < GEO[i].s1 - 1e-6) return i; return GEO.length - 1; };
-  const ALLURES = { approche: 'Entrée', pas: 'Pas moyen', 'pas-allonge': 'Pas allongé', 'pas-libre': 'Pas libre', trot: 'Trot de travail', 'galop-d': 'Galop à droite', 'galop-g': 'Galop à gauche' };
-  const famille = (c) => (c.indexOf('pas') === 0 ? 'pas' : c.indexOf('galop') === 0 ? 'galop' : c === 'trot' ? 'trot' : 'approche');
-  const allureA = (s) => { let c = 'approche'; T.allures.forEach((a) => { if (s >= a.s0 - 1e-6) c = a.code; }); return c; };
-  const mainTexte = (f) => { const m = (x) => (x === 'G' ? 'gauche' : 'droite'); return f.main === f.mainFin ? 'Main ' + m(f.main) : 'Main ' + m(f.main) + ' → ' + m(f.mainFin); };
-  const mmss = (t) => { const s = Math.max(0, Math.round(t)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
-  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  }
+  return T.total;
+}
 
-  const morceaux = (a, b, mode) => {
-    let h = '';
-    T.allures.forEach((seg) => {
-      const x0 = Math.max(a, seg.s0), x1 = Math.min(b, seg.s1);
-      if (x1 - x0 > 0.02) {
-        const d = trace(x0, x1), c = 'trace t-' + seg.code;
-        if (mode === 'vif') h += '<path class="' + c + ' halo-trace" d="' + d + '"></path>';
-        h += '<path class="' + c + '" d="' + d + '"></path>';
-        if (mode !== 'suite' && famille(seg.code) === 'galop') h += '<path class="trace rail" d="' + d + '"></path>';
-      }
+// Instant où l'abscisse s est atteinte pour la première fois.
+function instant(T, s) {
+  const k = T.cles;
+  for (let i = 1; i < k.length; i++) {
+    const t0 = k[i - 1][0], s0 = k[i - 1][1], t1 = k[i][0], s1 = k[i][1];
+    if (s <= s1 && s1 > s0) return t0 + (t1 - t0) * Math.max(0, s - s0) / (s1 - s0);
+  }
+  return T.duree;
+}
+
+// Vrai si l'instant t tombe pendant un arrêt (deux images clés au même endroit).
+function enArret(T, t) {
+  const k = T.cles;
+  for (let i = 1; i < k.length; i++) if (t >= k[i - 1][0] && t < k[i][0]) return k[i][1] === k[i - 1][1];
+  return false;
+}
+
+// Code de l'allure à l'abscisse s.
+function allure(T, s) {
+  let c = 'approche';
+  T.allures.forEach((a) => { if (s >= a.s0 - 1e-6) c = a.code; });
+  return c;
+}
+
+// Famille d'une allure : pas, trot, galop ou approche.
+const famille = (c) => (c.indexOf('pas') === 0 ? 'pas' : c.indexOf('galop') === 0 ? 'galop' : c === 'trot' ? 'trot' : 'approche');
+
+module.exports = { point, chemin, abscisse, instant, enArret, allure, famille };
+return module.exports;
+})();
+// moteur/questions.js (partagé avec Node)
+modules["./questions"] = (function () {
+const module = { exports: {} };
+'use strict';
+// Questions du quiz « Et ensuite ? », générées depuis le texte des figures d'un paquet.
+// Partagé : utilisé dans le navigateur par l'appli et dans Node par les tests.
+// Une question par figure tracée : « où / vers quelle lettre… ? », avec un indice et une explication.
+const Lecture = require('./lecture');
+
+function genererQuestions(paquet) {
+  const T = paquet.trace;
+  const LETTRES = {};
+  T.lettres.forEach((l) => { LETTRES[l.n] = l; });
+  const GEO = paquet.figures.filter((f) => f.s1 - f.s0 > 0.01);
+  const L = (s) => s.match(/[A-Z]/g) || [];
+  const cote = (n) => { const l = LETTRES[n]; return l.x === 0 ? 'g' : l.x === T.W ? 'd' : l.y === 0 ? 'C' : l.y === T.L ? 'A' : 'X'; };
+  const coteDe = (s) => { const p = Lecture.point(T, s); return p[0] < 2 ? 'g' : p[0] > T.W - 2 ? 'd' : p[1] < 2 ? 'C' : p[1] > T.L - 2 ? 'A' : 'X'; };
+  const out = [];
+  GEO.forEach((f, i) => {
+    if (f.sortie) return;
+    const av = i > 0 ? GEO[i - 1] : null;
+    const lg = f.lignes, l0 = lg[0][0], t0 = lg[0][1];
+    const cercle = lg.find((ln) => /cercle/i.test(ln[1]));
+    const depTrot = lg.find((ln) => /départ/i.test(ln[1]) && /trot/i.test(ln[1]));
+    const pas = lg.find((ln) => /pas moyen/i.test(ln[1]) && L(ln[0]).length);
+    let q, rep;
+    if (i === 0 && /arrêt/i.test(t0)) { q = 'Où t\'arrêtes-tu pour saluer ?'; rep = L(l0)[0]; }
+    else if (cercle) { const m = cercle[1].match(/cercle de (\d+)/i); q = 'Où fais-tu ton cercle' + (m ? ' de ' + m[1] + ' m' : '') + ' ?'; rep = L(cercle[0])[0]; }
+    else if (/changement de main/i.test(t0)) { q = 'Tu changes de main : vers quelle lettre ?'; rep = L(l0).pop(); }
+    else if (/coins/i.test(t0)) { q = 'Tu passes les coins : jusqu\'à quelle lettre ?'; rep = L(l0).pop(); }
+    else if (/départ/i.test(t0) && /galop/i.test(t0)) { const ls = L(l0); q = 'Tu pars au galop entre ' + ls[0] + ' et… ?'; rep = ls[1]; }
+    else if (depTrot && L(depTrot[0]).length === 2) { const ls = L(depTrot[0]); q = 'Tu pars au trot entre ' + ls[0] + ' et… ?'; rep = ls[1]; }
+    else if (/arrêt/i.test(t0)) { q = 'Où passes-tu au pas avant le salut final ?'; rep = L(l0)[0]; }
+    else if (pas) { q = 'À quelle lettre passes-tu au pas moyen ?'; rep = L(pas[0])[0]; }
+    else { q = 'Jusqu\'à quelle lettre vas-tu au ' + (/galop/i.test(t0) ? 'galop' : 'trot') + ' ?'; rep = L(lg[lg.length - 1][0]).pop(); }
+    if (!rep || !LETTRES[rep]) return;
+    const ici = av ? coteDe(av.s1) : coteDe(0), la = cote(rep);
+    // L'indice situe la lettre sans la nommer : C est du côté du juge, A du côté de l'entrée.
+    const ou = la === 'C' ? 'sur le petit côté du juge' : la === 'A' ? 'sur le petit côté de l\'entrée'
+      : ((ici === 'g' || ici === 'd') ? (la === ici ? 'sur le même grand côté que toi' : 'sur le grand côté d\'en face') : 'sur un grand côté');
+    out.push({
+      fig: f, avant: av, rep, question: q,
+      // À généraliser quand d'autres entrées en piste existeront (ligne du milieu…) : étape 4.
+      contexte: av ? 'Après la figure ' + av.n + ' : ' + av.lettres + ' · ' + av.court.toLowerCase() : 'Début de la reprise : tu entres en A, piste à main gauche.',
+      indice: 'Figure ' + f.n + ' : ' + f.court.toLowerCase() + '. La lettre est ' + ou + '.',
+      bravo: lg.map((ln) => (ln[0] ? ln[0] + ' : ' : '') + ln[1].charAt(0).toLowerCase() + ln[1].slice(1)).join(' · ') + '.',
     });
-    return h;
-  };
-  const marques = (sMax) => T.evenements
-    .filter((e) => e.s <= sMax + 1e-6 && !(e.type === 'transition' && ARRETS[e.s]))
-    .map((e) => (e.type === 'arret'
-      ? '<circle class="m-arret" cx="' + e.x + '" cy="' + e.y + '" r="0.95"></circle>'
-      : '<circle class="m-tr t-' + e.code + '" cx="' + e.x + '" cy="' + e.y + '" r="0.6"></circle>'))
-    .join('');
-
-  const R = { t: 0, lecture: false, vitesse: 2, pauseFig: false, raf: 0, dernier: 0, stopA: null, gi: -1, fin: null, allure: '', vue: null };
-  const Q = { i: 0, statut: 'attente', choix: null, indice: false, essais: 0, premier: false, vue: null };
-  let FN = 1;
-
-  function choisirReprise(id) {
-    const p = PAQUETS[id];
-    if (!p) { P = null; CLE = ''; return false; }
-    P = p; T = p.trace;
-    VB = [-5, -5, T.W + 10, T.L + 10]; RATIO = VB[2] / VB[3]; PTS = T.pts; DS = T.ds;
-    LETTRES = {}; T.lettres.forEach((l) => { LETTRES[l.n] = l; });
-    FIGS = p.figures.map((f) => Object.assign({}, f, { geo: f.s1 - f.s0 > 0.01, set: lettresDe(f) }));
-    GEO = FIGS.filter((f) => f.geo);
-    NB_NOTEES = FIGS.filter((f) => !f.sortie).length;
-    ARRETS = {}; T.evenements.forEach((e) => { if (e.type === 'arret') ARRETS[e.s] = true; });
-    PLAQUES = T.lettres.map((l) => {
-      if (l.x === 0) return { n: l.n, x: -2.7, y: l.y };
-      if (l.x === T.W) return { n: l.n, x: T.W + 2.7, y: l.y };
-      if (l.y === 0) return { n: l.n, x: l.x, y: -2.7 };
-      if (l.y === T.L) return { n: l.n, x: l.x, y: T.L + 2.7 };
-      return null;
-    }).filter(Boolean);
-    CENTRE = T.lettres.filter((l) => l.x !== 0 && l.x !== T.W && l.y !== 0 && l.y !== T.L);
-    FANTOME = T.allures.map((a) => '<path class="trace fantome" d="' + trace(a.s0, a.s1) + '"></path>').join('');
-    TOUT = morceaux(0, T.total, 'plein');
-    CRANS = GEO.slice(1).map((f) => '<span class="cran" style="left:' + (100 * tAt(f.s0) / T.duree).toFixed(2) + '%"></span>').join('');
-    CLE = 'dressage:' + p.id;
-    D = Object.assign(VIDE(), lire(CLE, {}));
-    QUESTIONS = genererQuestions();
-    R.t = 0; R.gi = -1; R.fin = null;
-    Q.i = Math.min(Number(D.suiteQuiz) || 0, QUESTIONS.length);
-    FN = 1;
-    if (MODE === 'appli' && REG.courante !== id) { REG.courante = id; sauverReglages(); }
-    return true;
-  }
-
-  // ———————————————— 4. Dessin de la carrière (SVG)
-  const NS = 'http://www.w3.org/2000/svg';
-  function carriere(o) {
-    const svg = document.createElementNS(NS, 'svg');
-    svg.setAttribute('viewBox', (o.viewBox || VB).join(' '));
-    svg.setAttribute('class', 'carriere' + (o.classe ? ' ' + o.classe : ''));
-    svg.setAttribute('role', 'img');
-    svg.setAttribute('aria-label', o.label || 'Carrière de ' + T.W + ' sur ' + T.L + ' mètres');
-    svg.innerHTML =
-      '<rect class="lice-ext" x="-0.45" y="-0.45" width="' + (T.W + 0.9) + '" height="' + (T.L + 0.9) + '" rx="0.8"></rect>' +
-      '<rect class="sol" x="0" y="0" width="' + T.W + '" height="' + T.L + '" rx="0.5"></rect>' +
-      '<line class="milieu" x1="' + T.W / 2 + '" y1="0.7" x2="' + T.W / 2 + '" y2="' + (T.L - 0.7) + '"></line>' +
-      '<g class="c-centre">' + (o.centre === false ? '' : CENTRE.map((l) => '<circle cx="' + l.x + '" cy="' + l.y + '" r="0.3"></circle><text x="' + (l.x + 0.7) + '" y="' + (l.y + 0.55) + '">' + l.n + '</text>').join('')) + '</g>' +
-      '<g class="c-fantome">' + (o.fantome ? FANTOME : '') + '</g>' +
-      '<g class="c-faits">' + (o.tout ? TOUT : '') + '</g><g class="c-suite"></g><g class="c-vif"></g><g class="c-marques"></g>' +
-      '<g class="c-lettres">' + (o.lettres === false ? '' : PLAQUES.map((p) => '<g class="plaque" data-l="' + p.n + '"><rect x="' + (p.x - 1.8) + '" y="' + (p.y - 1.8) + '" width="3.6" height="3.6" rx="0.5"></rect><text x="' + p.x + '" y="' + (p.y + 0.95) + '" text-anchor="middle">' + p.n + '</text></g>').join('')) + '</g>' +
-      '<g class="c-pion"' + (o.pion === false ? ' display="none"' : '') + '><g class="pion"><circle class="halo" r="2.4"></circle><path d="M2.15 0L0.42 -1.24A1.3 1.3 0 1 0 0.42 1.24Z"></path><circle class="coeur" cx="-0.15" cy="0" r="0.42"></circle></g></g>';
-    const g = (n) => svg.querySelector('.c-' + n);
-    const pion = svg.querySelector('.pion');
-    return {
-      svg,
-      couche: (n, html) => { g(n).innerHTML = html; },
-      actives: (set) => svg.querySelectorAll('.plaque').forEach((p) => p.classList.toggle('active', !!set[p.dataset.l])),
-      pion: (s) => {
-        const p = ptAt(s), a = ptAt(Math.max(0, s - 0.4)), b = ptAt(Math.min(T.total, s + 0.4));
-        const ang = Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI;
-        pion.setAttribute('transform', 'translate(' + r2(p[0]) + ' ' + r2(p[1]) + ') rotate(' + Math.round(ang) + ')');
-      },
-      cacherPion: (oui) => { svg.querySelector('.c-pion').style.display = oui ? 'none' : ''; },
-    };
-  }
-
-  // Taille de la carrière : le plus grand possible dans la place disponible,
-  // recalculée dès que la zone change (contenu de la carte, rotation, polices).
-  let ajuster = () => {};
-  window.addEventListener('resize', () => ajuster());
-  if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => ajuster());
-  const grandEcran = () => window.matchMedia('(min-width: 900px)').matches;
-  let observateur = null;
-  function suivreTaille(racine) {
-    if (observateur) observateur.disconnect();
-    observateur = null;
-    if (typeof ResizeObserver === 'undefined') return;
-    observateur = new ResizeObserver(() => ajuster());
-    observateur.observe(racine);
-    const scene = racine.querySelector('.scene');
-    if (scene && getComputedStyle(scene).display !== 'contents') observateur.observe(scene);
-  }
-  function ajusterScene(racine) {
-    const inn = racine.querySelector('.plateau-in'), svg = inn && inn.querySelector('svg');
-    if (!svg) return;
-    const scene = racine.querySelector('.scene');
-    let h, wMax;
-    if (grandEcran() && racine.classList.contains('regarder')) { h = racine.clientHeight - 14; wMax = racine.clientWidth * 0.34; }
-    else { h = scene.clientHeight - 14; wMax = scene.clientWidth * 0.56; }
-    let H = Math.max(160, h), W = H * RATIO;
-    if (W > wMax) { W = wMax; H = W / RATIO; }
-    inn.style.width = W + 'px'; inn.style.height = H + 'px';
-    svg.setAttribute('width', W); svg.setAttribute('height', H);
-    racine.style.setProperty('--plateau-l', (W + 14) + 'px');
-  }
-
-  // ———————————————— 5. Icônes
-  const ic = (d) => '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + d + '</svg>';
-  const I = {
-    retour: ic('<path d="M15 18l-6-6 6-6"/>'),
-    reglages: ic('<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>'),
-    etoile: '<svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M12 2.6l2.9 5.9 6.5.95-4.7 4.6 1.1 6.5L12 17.5l-5.8 3.05 1.1-6.5L2.6 9.45l6.5-.95z"/></svg>',
-    lecture: '<svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor" aria-hidden="true"><path d="M8 5.2v13.6a1 1 0 0 0 1.5.86l10.6-6.8a1 1 0 0 0 0-1.72L9.5 4.34A1 1 0 0 0 8 5.2z"/></svg>',
-    pause: '<svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4.2" height="14" rx="1.2"/><rect x="13.8" y="5" width="4.2" height="14" rx="1.2"/></svg>',
-    prec: ic('<path d="M19 19.5L9 12l10-7.5z" fill="currentColor"/><path d="M5 5v14"/>'),
-    suiv: ic('<path d="M5 4.5L15 12 5 19.5z" fill="currentColor"/><path d="M19 5v14"/>'),
-    drapeau: ic('<path d="M5 21V4"/><path d="M5 4.5h11.5l-2.2 4 2.2 4H5"/>'),
-    oeil: ic('<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'),
-    question: ic('<circle cx="12" cy="12" r="9.5"/><path d="M9.2 9.2a2.9 2.9 0 0 1 5.6 1c0 1.9-2.8 2.6-2.8 4"/><path d="M12 17.4h.01"/>'),
-    livre: ic('<path d="M2.5 5h6a3.5 3.5 0 0 1 3.5 3.5V20a2.6 2.6 0 0 0-2.6-2.6H2.5z"/><path d="M21.5 5h-6A3.5 3.5 0 0 0 12 8.5V20a2.6 2.6 0 0 1 2.6-2.6h6.9z"/>'),
-    cadenas: ic('<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>'),
-    fer: ic('<path d="M6.5 4v8a5.5 5.5 0 0 0 11 0V4"/><path d="M4.8 4h3.4M15.8 4h3.4"/>'),
-    ampoule: ic('<path d="M9 18h6M10 21.5h4"/><path d="M12 2.5a6.5 6.5 0 0 0-4 11.6c.7.6 1 1.4 1 2.4h6c0-1 .3-1.8 1-2.4a6.5 6.5 0 0 0-4-11.6z"/>'),
-    ok: ic('<path d="M4.5 12.5l5 5L19.5 7"/>'),
-    fermer: ic('<path d="M6 6l12 12M18 6L6 18"/>'),
-    rejouer: ic('<path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/>'),
-    fleche: ic('<path d="M5 12h14M13 6l6 6-6 6"/>'),
-    importer: ic('<path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 17v2.5A1.5 1.5 0 0 0 5.5 21h13a1.5 1.5 0 0 0 1.5-1.5V17"/>'),
-    partager: ic('<path d="M12 3v12M8 7l4-4 4 4"/><path d="M5 11v8.5A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V11"/>'),
-  };
-  document.getElementById('fermer-reglages').innerHTML = I.fermer;
-
-  // ———————————————— 6. Questions du quiz, générées depuis le texte des figures
-  function genererQuestions() {
-    const L = (s) => s.match(/[A-Z]/g) || [];
-    const cote = (n) => { const l = LETTRES[n]; return l.x === 0 ? 'g' : l.x === T.W ? 'd' : l.y === 0 ? 'C' : l.y === T.L ? 'A' : 'X'; };
-    const coteDe = (s) => { const p = ptAt(s); return p[0] < 2 ? 'g' : p[0] > T.W - 2 ? 'd' : p[1] < 2 ? 'C' : p[1] > T.L - 2 ? 'A' : 'X'; };
-    const out = [];
-    GEO.forEach((f, i) => {
-      if (f.sortie) return;
-      const av = i > 0 ? GEO[i - 1] : null;
-      const lg = f.lignes, l0 = lg[0][0], t0 = lg[0][1];
-      const cercle = lg.find((ln) => /cercle/i.test(ln[1]));
-      const depTrot = lg.find((ln) => /départ/i.test(ln[1]) && /trot/i.test(ln[1]));
-      const pas = lg.find((ln) => /pas moyen/i.test(ln[1]) && L(ln[0]).length);
-      let q, rep;
-      if (i === 0 && /arrêt/i.test(t0)) { q = 'Où t\'arrêtes-tu pour saluer ?'; rep = L(l0)[0]; }
-      else if (cercle) { const m = cercle[1].match(/cercle de (\d+)/i); q = 'Où fais-tu ton cercle' + (m ? ' de ' + m[1] + ' m' : '') + ' ?'; rep = L(cercle[0])[0]; }
-      else if (/changement de main/i.test(t0)) { q = 'Tu changes de main : vers quelle lettre ?'; rep = L(l0).pop(); }
-      else if (/coins/i.test(t0)) { q = 'Tu passes les coins : jusqu\'à quelle lettre ?'; rep = L(l0).pop(); }
-      else if (/départ/i.test(t0) && /galop/i.test(t0)) { const ls = L(l0); q = 'Tu pars au galop entre ' + ls[0] + ' et… ?'; rep = ls[1]; }
-      else if (depTrot && L(depTrot[0]).length === 2) { const ls = L(depTrot[0]); q = 'Tu pars au trot entre ' + ls[0] + ' et… ?'; rep = ls[1]; }
-      else if (/arrêt/i.test(t0)) { q = 'Où passes-tu au pas avant le salut final ?'; rep = L(l0)[0]; }
-      else if (pas) { q = 'À quelle lettre passes-tu au pas moyen ?'; rep = L(pas[0])[0]; }
-      else { q = 'Jusqu\'à quelle lettre vas-tu au ' + (/galop/i.test(t0) ? 'galop' : 'trot') + ' ?'; rep = L(lg[lg.length - 1][0]).pop(); }
-      if (!rep || !LETTRES[rep]) return;
-      const ici = av ? coteDe(av.s1) : coteDe(0), la = cote(rep);
-      const ou = (la === 'C' || la === 'A') ? 'sur le petit côté de ' + la : ((ici === 'g' || ici === 'd') ? (la === ici ? 'sur le même grand côté que toi' : 'sur le grand côté d\'en face') : 'sur un grand côté');
-      out.push({
-        fig: f, avant: av, rep, question: q,
-        contexte: av ? 'Après la figure ' + av.n + ' : ' + av.lettres + ' · ' + av.court.toLowerCase() : 'Début de la reprise : tu entres en A, piste à main gauche.',
-        indice: 'Figure ' + f.n + ' : ' + f.court.toLowerCase() + '. La lettre est ' + ou + '.',
-        bravo: lg.map((ln) => (ln[0] ? ln[0] + ' : ' : '') + ln[1].charAt(0).toLowerCase() + ln[1].slice(1)).join(' · ') + '.',
-      });
-    });
-    return out;
-  }
-  const nbSues = () => QUESTIONS.filter((q) => D.quiz[q.fig.n] && D.quiz[q.fig.n].ok).length;
-
-  // ———————————————— 7. Jours d'entraînement
-  const jourISO = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-  const marquerJour = () => { const j = jourISO(new Date()); if (D.jours.indexOf(j) < 0) { D.jours.push(j); D.jours = D.jours.slice(-200); sauver(); } };
-  function semaine() {
-    const auj = new Date(); auj.setHours(12, 0, 0, 0);
-    const lundi = new Date(auj); lundi.setDate(auj.getDate() - ((auj.getDay() + 6) % 7));
-    const jours = [];
-    for (let i = 0; i < 7; i++) {
-      const d = new Date(lundi); d.setDate(lundi.getDate() + i);
-      const iso = jourISO(d);
-      jours.push({ l: 'LMMJVSD'[i], fait: D.jours.indexOf(iso) >= 0, auj: iso === jourISO(auj) });
-    }
-    let serie = 0;
-    const d = new Date(auj);
-    if (D.jours.indexOf(jourISO(d)) < 0) d.setDate(d.getDate() - 1);
-    while (D.jours.indexOf(jourISO(d)) >= 0) { serie++; d.setDate(d.getDate() - 1); }
-    const texte = serie >= 2 ? serie + ' jours d\'affilée, continue !' : serie === 1 ? '1 jour, on enchaîne ?' : 'Lance-toi aujourd\'hui';
-    return { jours, texte };
-  }
-
-  // ———————————————— 8. Morceaux d'interface communs
-  const entete = (titre, sous, retour) =>
-    '<header class="barre">' +
-      (retour ? '<a class="bouton-icone" href="#accueil" aria-label="Retour à l\'accueil">' + I.retour + '</a>' : '') +
-      '<div class="titres"><h1>' + esc(titre) + '</h1><p>' + esc(sous) + '</p></div>' +
-      (P ? '<span class="etoiles" title="Étoiles gagnées au quiz">' + I.etoile + '<span id="nb-etoiles">' + D.etoiles + '</span></span>' : '') +
-      '<button type="button" class="bouton-icone" data-action="reglages" aria-label="Réglages et test hors-ligne">' + I.reglages + '</button>' +
-    '</header>';
-  const modes = (actif) => '<nav class="modes" aria-label="Modes">' +
-    [['regarder', 'Regarder'], ['deviner', 'Deviner'], ['fiches', 'Fiches']].map((m) =>
-      '<a href="#' + m[0] + '"' + (m[0] === actif ? ' aria-current="page"' : '') + '>' + m[1] + '</a>').join('') + '</nav>';
-  const majEtoiles = () => { const e = document.getElementById('nb-etoiles'); if (e) e.textContent = D.etoiles; };
-  const astuceInstallation = () => (MODE === 'appli' && IOS && !INSTALLEE
-    ? '<p class="astuce">' + I.partager + '<span>Pour l\'avoir aussi sans réseau : touche <b>Partager</b> dans Safari, puis <b>Sur l\'écran d\'accueil</b>.</span></p>'
-    : '');
-  let toastMinuterie = 0;
-  function annoncer(texte, erreur) {
-    const t = document.getElementById('toast');
-    t.textContent = texte; t.className = 'toast' + (erreur ? ' ko' : ''); t.hidden = false;
-    clearTimeout(toastMinuterie);
-    toastMinuterie = setTimeout(() => { t.hidden = true; }, erreur ? 6000 : 3500);
-  }
-
-  // ———————————————— 9. Écran Accueil (et bienvenue quand l'appli est vide)
-  function bienvenue() {
-    app.innerHTML =
-      entete('Ma reprise', 'Apprends ta reprise par cœur', false) +
-      '<main class="accueil">' +
-        astuceInstallation() +
-        '<section class="bienvenue">' +
-          '<h2>Ajoute ta reprise</h2>' +
-          '<p>Ta reprise arrive sous forme d\'un fichier <b>.html</b> préparé sur l\'ordinateur. Une fois importée, elle reste dans l\'appli, même sans réseau.</p>' +
-          '<ol><li>Dans Mail, touche la pièce jointe, puis <b>Partager → Enregistrer dans Fichiers</b>.</li><li>Ici, touche <b>Importer un paquet</b> et choisis le fichier.</li></ol>' +
-          '<button type="button" class="btn btn-principal" data-action="importer-paquet">' + I.importer + 'Importer un paquet</button>' +
-        '</section>' +
-        '<p class="pied">' + I.cadenas + '<span>Rien ne quitte ton téléphone · <button type="button" data-action="reglages">Réglages et test</button></span></p>' +
-      '</main>';
-    ajuster = () => {};
-  }
-
-  function accueil() {
-    if (!P) { bienvenue(); return; }
-    const sues = nbSues(), sem = semaine();
-    const ech = (cls, style) => '<svg viewBox="0 0 22 8" width="22" height="8" aria-hidden="true"><path class="trace ' + cls + '" d="M2 4H20" style="' + style + '"></path></svg>';
-    const ids = Object.keys(PAQUETS);
-    const mesReprises = MODE === 'appli'
-      ? '<section class="mes-reprises" aria-label="Mes reprises"><h2>Mes reprises</h2>' +
-          (ids.length > 1 ? '<ul class="liste-reprises">' + ids.map((id) => { const p = PAQUETS[id]; return '<li><button type="button" data-action="choisir-reprise" data-id="' + esc(id) + '" aria-current="' + (id === P.id) + '"><b>' + esc(p.titre) + '</b><span>' + esc(p.federation) + ' · v' + p.version + '</span></button></li>'; }).join('') + '</ul>' : '') +
-          '<button type="button" class="btn" data-action="importer-paquet">' + I.importer + 'Importer un paquet</button></section>'
-      : '';
-    app.innerHTML =
-      entete(REG.prenom ? 'Salut ' + REG.prenom + ' !' : 'Salut !', 'On révise ta reprise ?', false) +
-      '<main class="accueil">' +
-        astuceInstallation() +
-        '<section class="carte-reprise" aria-label="Ma reprise">' +
-          '<div class="vignette" id="vignette"></div>' +
-          '<div class="infos">' +
-            '<div class="sur-titre">' + esc(P.federation) + ' · protocole du ' + esc(P.versionProtocole) + '</div>' +
-            '<h2>' + esc(P.titre) + '</h2>' +
-            '<div class="puces"><span>' + T.W + ' × ' + T.L + '</span><span>' + NB_NOTEES + ' figures</span><span>≈ ' + Math.round(T.duree / 60) + ' min</span></div>' +
-            '<ul class="legende">' +
-              '<li>' + ech('t-pas', 'stroke-width:3.2;stroke-dasharray:.01 5') + 'Pas</li>' +
-              '<li>' + ech('t-trot', 'stroke-width:3.2') + 'Trot</li>' +
-              '<li><svg viewBox="0 0 22 8" width="22" height="8" aria-hidden="true"><path class="trace t-galop-d" d="M2 4H20" style="stroke-width:4.4"></path><path class="trace rail" d="M2 4H20" style="stroke-width:1.3"></path></svg>Galop</li>' +
-              '<li><svg viewBox="0 0 22 8" width="22" height="8" aria-hidden="true"><circle cx="11" cy="4" r="3.3" style="fill:var(--arret)"></circle></svg>Arrêt</li>' +
-            '</ul>' +
-            '<div class="sues"><div class="sues-ligne"><span>Figures sues</span><b>' + sues + ' / ' + QUESTIONS.length + '</b></div>' +
-              '<div class="jauge"><div style="width:' + Math.round(100 * sues / Math.max(1, QUESTIONS.length)) + '%"></div></div></div>' +
-          '</div>' +
-          '<div class="actions">' +
-            '<a class="btn btn-principal" href="#regarder">' + I.oeil + 'Regarder le parcours</a>' +
-            '<a class="btn" href="#deviner">' + I.question + 'Deviner</a>' +
-            '<a class="btn" href="#fiches/1">' + I.livre + 'Fiches</a>' +
-          '</div>' +
-        '</section>' +
-        '<section class="semaine" aria-label="Ma semaine">' +
-          '<div class="semaine-titre"><h2>Ma semaine</h2><span>' + sem.texte + '</span></div>' +
-          '<ol>' + sem.jours.map((j) => '<li><span class="jour' + (j.fait ? ' fait' : '') + (j.auj ? ' auj' : '') + '">' + (j.fait ? I.fer : '') + '</span>' + j.l + '</li>').join('') + '</ol>' +
-        '</section>' +
-        mesReprises +
-        '<p class="pied">' + I.cadenas + '<span>' + (MODE === 'paquet' ? 'Paquet hors-ligne v' + P.version + ' · tes notes restent sur cet appareil' : 'Hors-ligne · tes notes restent sur ce téléphone') + ' · <button type="button" data-action="reglages">Réglages et test</button></span></p>' +
-      '</main>';
-    const v = carriere({ tout: true, centre: false, lettres: false, pion: false, classe: 'vignette-svg', viewBox: [-1, -1, T.W + 2, T.L + 2], label: 'Tracé complet de la reprise' });
-    document.getElementById('vignette').appendChild(v.svg);
-    ajuster = () => {};
-  }
-
-  // ———————————————— 10. Écran Regarder
-  function regarder(arg) {
-    const n = Number(arg);
-    if (n) { const i = GEO.findIndex((x) => x.n === n); if (i >= 0) R.t = tAt(GEO[i].s0 + 0.05); }
-    app.innerHTML =
-      entete(P.titre, 'Carrière ' + T.W + ' × ' + T.L + ' · ' + NB_NOTEES + ' figures', true) + modes('regarder') +
-      '<main class="regarder">' +
-        '<div class="scene"><div class="plateau"><div class="plateau-in" id="plateau-in"></div></div><ol class="chemin" id="chemin" aria-label="Chemin des figures"></ol></div>' +
-        '<section class="carte" id="carte" aria-live="polite"></section>' +
-        '<div class="progression"><span id="chrono">0:00</span><div class="piste-prog"><div class="rempli" id="rempli"></div>' + CRANS + '</div><span>' + mmss(T.duree) + '</span></div>' +
-        '<div class="commandes">' +
-          '<button type="button" class="rond" data-action="precedente" aria-label="Figure précédente">' + I.prec + '</button>' +
-          '<button type="button" class="lecture" data-action="lecture" id="btn-lecture"></button>' +
-          '<button type="button" class="rond" data-action="suivante" aria-label="Figure suivante">' + I.suiv + '</button>' +
-          '<button type="button" class="rond" data-action="vitesse" id="btn-vitesse" aria-label="Vitesse de lecture">×' + R.vitesse + '</button>' +
-          '<button type="button" class="rond" data-action="pause-figure" id="btn-pause-fig" aria-pressed="' + R.pauseFig + '" aria-label="S\'arrêter à la fin de chaque figure">' + I.drapeau + '</button>' +
-        '</div>' +
-        '<div class="bas" id="bas"></div>' +
-      '</main>';
-    R.vue = carriere({ fantome: true });
-    document.getElementById('plateau-in').appendChild(R.vue.svg);
-    R.gi = -1; R.fin = null; R.allure = '';
-    const racine = app.querySelector('.regarder');
-    ajuster = () => ajusterScene(racine);
-    majBoutonLecture();
-    dessiner();
-    ajuster();
-    suivreTaille(racine);
-  }
-
-  function dessiner() {
-    const v = R.vue;
-    if (!v || !document.getElementById('carte')) return;
-    const s = sAt(R.t), fin = R.t >= T.duree - 0.01, gi = geoIndex(s + 1e-3), cf = GEO[gi], arret = enArret(R.t);
-    const montre = fin ? FIGS[FIGS.length - 1] : cf;
-    if (gi !== R.gi || fin !== R.fin) {
-      R.gi = gi; R.fin = fin; R.allure = '';
-      v.couche('faits', morceaux(0, cf.s0, 'faits'));
-      v.couche('marques', marques(cf.s1));
-      v.actives(cf.set);
-      remplirChemin(montre, s, fin);
-      remplirCarte(montre, fin);
-      remplirBas(montre);
-    }
-    v.couche('vif', morceaux(cf.s0, s, 'vif'));
-    v.couche('suite', fin ? '' : morceaux(s, cf.s1, 'suite'));
-    v.pion(s);
-    const code = arret ? 'arret' : allureA(s);
-    if (code !== R.allure && !fin) {
-      R.allure = code;
-      const p = document.getElementById('puce-allure');
-      if (p) { p.textContent = arret ? 'Arrêt' : ALLURES[code]; p.dataset.f = arret ? 'arret' : famille(code); }
-    }
-    document.getElementById('rempli').style.width = (100 * R.t / T.duree).toFixed(2) + '%';
-    document.getElementById('chrono').textContent = mmss(R.t);
-  }
-
-  function remplirChemin(cur, s, fin) {
-    const ol = document.getElementById('chemin');
-    ol.innerHTML = FIGS.map((f) => {
-      const actuel = f === cur;
-      const fait = !actuel && (fin || (f.geo ? f.s1 <= s + 1e-6 : f.s0 < s - 1e-6));
-      const coul = f.allures.length ? 'var(--' + famille(f.allures[f.allures.length - 1]) + ')' : 'var(--approche)';
-      const cls = [actuel ? 'actuel' : '', fait ? 'fait' : '', f.note ? 'note' : ''].join(' ').trim();
-      const l1 = f.note ? 'Note' : f.sortie ? 'Sortie' : esc(f.lettres.replace(/ · /g, '·').replace(/ – /g, '–'));
-      const l2 = esc(f.note ? f.court.replace('Note : ', '') : f.court);
-      return '<li class="' + cls + '" style="--c:' + coul + '"><button type="button" data-action="aller" data-n="' + f.n + '"' + (f.geo ? '' : ' disabled') + (actuel ? ' aria-current="step"' : '') + '>' +
-        '<span class="num">' + (f.sortie ? 'FIN' : f.n) + '</span><span class="txt"><span class="l1">' + l1 + '</span><span class="l2">' + l2 + '</span></span></button></li>';
-    }).join('');
-    const li = ol.querySelector('.actuel');
-    if (li) ol.scrollTop = Math.max(0, li.offsetTop - ol.clientHeight / 2 + li.offsetHeight / 2);
-  }
-
-  function remplirCarte(f, fin) {
-    document.getElementById('carte').innerHTML =
-      '<div class="grand-num' + (fin ? ' fin' : '') + '">' + (fin ? 'FIN' : f.n) + '</div>' +
-      '<div class="corps">' +
-        '<div class="etiquette">' + (fin ? '<span>Reprise terminée, bravo !</span>' : '<span class="pc">Figure ' + f.n + ' sur ' + NB_NOTEES + '</span><span class="puce-allure" id="puce-allure"></span>') + '<span class="main">' + mainTexte(f) + '</span></div>' +
-        f.lignes.map((ln) => '<div class="ligne">' + (ln[0] ? '<b>' + esc(ln[0]) + '</b>' : '') + esc(ln[1]) + '</div>').join('') +
-      '</div>';
-  }
-
-  function remplirBas(f) {
-    document.getElementById('bas').innerHTML =
-      '<section class="bloc"><h2>Ce que regarde le juge</h2><p>' + esc(f.idees || 'Pas de note pour la sortie : on quitte la piste au pas libre, les rênes longues.') + '</p>' +
-        (f.sortie ? '' : '<p class="discret">Coefficient ' + (f.coef || 1) + ' · noté sur 10</p>') + '</section>' +
-      '<section class="bloc"><label class="h2" for="note-r">Mes notes · figure ' + f.n + '</label>' +
-        '<textarea id="note-r" data-note="' + f.n + '" placeholder="Ce qui t\'aide à t\'en souvenir…">' + esc(D.notes[f.n] || '') + '</textarea>' +
-        '<p class="discret">Enregistré sur cet appareil.</p></section>';
-  }
-
-  function majBoutonLecture() {
-    const b = document.getElementById('btn-lecture');
-    if (!b) return;
-    b.innerHTML = R.lecture ? I.pause : I.lecture;
-    b.setAttribute('aria-label', R.lecture ? 'Mettre en pause' : 'Lancer le parcours');
-  }
-  function tic(maintenant) {
-    if (!R.dernier) R.dernier = maintenant;
-    const dt = Math.min(0.1, (maintenant - R.dernier) / 1000);
-    R.dernier = maintenant;
-    let t = R.t + dt * R.vitesse, stop = false;
-    if (R.stopA !== null && t >= R.stopA) { t = R.stopA; stop = true; }
-    if (t >= T.duree) { t = T.duree; stop = true; }
-    R.t = t;
-    dessiner();
-    if (stop) { R.lecture = false; R.raf = 0; majBoutonLecture(); }
-    else R.raf = requestAnimationFrame(tic);
-  }
-  function lecture() {
-    if (R.lecture) { arreter(); return; }
-    if (R.t >= T.duree - 0.01) R.t = 0;
-    R.stopA = R.pauseFig ? tAt(GEO[geoIndex(sAt(R.t) + 0.05)].s1 - 0.05) : null;
-    R.lecture = true; R.dernier = 0;
-    marquerJour();
-    majBoutonLecture();
-    R.raf = requestAnimationFrame(tic);
-  }
-  function arreter() {
-    if (R.raf) cancelAnimationFrame(R.raf);
-    R.raf = 0;
-    if (R.lecture) { R.lecture = false; majBoutonLecture(); }
-  }
-  function allerFig(i) {
-    arreter();
-    R.t = i >= GEO.length ? T.duree : tAt(GEO[Math.max(0, i)].s0 + 0.05);
-    dessiner();
-  }
-
-  // ———————————————— 11. Écran Deviner
-  function deviner() {
-    Q.statut = 'attente'; Q.choix = null; Q.indice = false; Q.essais = 0;
-    app.innerHTML =
-      entete(P.titre, 'Et ensuite ?', true) + modes('deviner') +
-      '<main class="deviner">' +
-        '<div class="scene"><div class="plateau"><div class="plateau-in" id="plateau-in"><div class="superpose" id="superpose"></div></div></div><div class="question" id="question"></div></div>' +
-        '<section class="retour" id="retour" aria-live="polite"></section>' +
-        '<div class="commandes-quiz" id="cmd-quiz"></div>' +
-      '</main>';
-    Q.vue = carriere({ lettres: false, classe: 'quiz', label: 'Carrière : ce que tu as déjà fait' });
-    const inn = document.getElementById('plateau-in');
-    inn.insertBefore(Q.vue.svg, inn.firstChild);
-    document.getElementById('superpose').innerHTML = PLAQUES.map((p) =>
-      '<button type="button" class="lettre-btn" data-action="lettre" data-l="' + p.n + '" style="left:' + ((p.x - VB[0]) / VB[2] * 100).toFixed(2) + '%;top:' + ((p.y - VB[1]) / VB[3] * 100).toFixed(2) + '%" aria-label="Lettre ' + p.n + '">' + p.n + '</button>').join('');
-    const racine = app.querySelector('.deviner');
-    ajuster = () => ajusterScene(racine);
-    dessinerQuiz();
-    ajuster();
-    suivreTaille(racine);
-  }
-
-  function dessinerQuiz() {
-    const v = Q.vue, fini = Q.i >= QUESTIONS.length;
-    const zoneQ = document.getElementById('question'), retour = document.getElementById('retour'), cmd = document.getElementById('cmd-quiz');
-    app.querySelectorAll('.lettre-btn').forEach((b) => { b.classList.remove('juste', 'faux'); b.disabled = fini; });
-    if (fini) {
-      v.couche('faits', ''); v.couche('vif', TOUT); v.couche('marques', marques(T.total)); v.pion(T.total);
-      const sues = nbSues();
-      zoneQ.innerHTML = '<div class="compteur">Série terminée</div><p class="enonce">Tu connais ' + sues + ' figure' + (sues > 1 ? 's' : '') + ' sur ' + QUESTIONS.length + ' du premier coup.</p><div class="sues-mini">' + I.etoile + ' ' + D.etoiles + ' étoiles au total</div>';
-      retour.className = 'retour bien';
-      retour.innerHTML = '<span class="pastille">' + I.ok + '</span><div><b>Bien joué !</b><p>Rejoue la série pour décrocher les figures qui manquent.</p></div>';
-      cmd.innerHTML = '<button type="button" class="btn btn-principal" data-action="rejouer">' + I.rejouer + 'Rejouer la série</button>';
-      return;
-    }
-    const q = QUESTIONS[Q.i], f = q.fig, av = q.avant, bien = Q.statut === 'bien';
-    v.couche('faits', av ? morceaux(0, bien ? av.s1 : av.s1 - 1.0, 'plein') : '');
-    v.couche('vif', bien ? morceaux(f.s0, f.s1, 'vif') : '');
-    v.couche('marques', marques(bien ? f.s1 : (av ? av.s1 : 0)));
-    // Avant la réponse, le poney s'arrête un peu avant la lettre : le début du virage trahirait la réponse.
-    v.pion(bien ? f.s1 - 0.3 : (av ? av.s1 - 1.2 : 0));
-    app.querySelectorAll('.lettre-btn').forEach((b) => {
-      if (bien && b.dataset.l === q.rep) b.classList.add('juste');
-      if (Q.statut === 'pasbien' && b.dataset.l === Q.choix) b.classList.add('faux');
-    });
-    zoneQ.innerHTML =
-      '<div class="compteur">Question ' + (Q.i + 1) + ' sur ' + QUESTIONS.length + '</div>' +
-      '<div class="contexte">' + esc(q.contexte) + '</div>' +
-      '<p class="enonce">' + esc(q.question) + '</p>' +
-      (bien ? '' : '<button type="button" class="btn btn-petit" data-action="indice">' + I.ampoule + 'Un indice ?</button>') +
-      (Q.indice && !bien ? '<p class="indice">' + esc(q.indice) + '</p>' : '') +
-      '<div class="sues-mini">' + I.etoile + nbSues() + ' / ' + QUESTIONS.length + ' figures sues</div>';
-    retour.className = 'retour ' + Q.statut;
-    retour.innerHTML = bien
-      ? '<span class="pastille">' + I.ok + '</span><div><b>Bien vu, c\'est ' + q.rep + ' !</b><p>' + esc(q.bravo) + (Q.premier ? ' +1 étoile.' : '') + '</p></div>'
-      : Q.statut === 'pasbien'
-        ? '<span class="pastille">!</span><div><b>Pas tout à fait…</b><p>' + Q.choix + ' n\'est pas la bonne lettre. Réessaie ou prends un indice.</p></div>'
-        : '<span class="pastille">?</span><div><b>À toi de jouer</b><p>Repère ton poney sur la carrière, puis touche la lettre.</p></div>';
-    cmd.innerHTML =
-      '<button type="button" class="btn" data-action="rejouer" aria-label="Rejouer la série">' + I.rejouer + '<span class="lib">Rejouer</span></button>' +
-      '<button type="button" class="btn btn-principal" data-action="question-suivante"' + (bien ? '' : ' disabled') + '>Question suivante' + I.fleche + '</button>';
-  }
-
-  function repondre(l) {
-    if (Q.i >= QUESTIONS.length || Q.statut === 'bien') return;
-    const q = QUESTIONS[Q.i];
-    marquerJour();
-    if (l === q.rep) {
-      Q.premier = Q.essais === 0 && !Q.indice;
-      D.quiz[q.fig.n] = { ok: Q.premier, le: jourISO(new Date()) };
-      if (Q.premier) D.etoiles += 1;
-      Q.statut = 'bien';
-      sauver();
-      majEtoiles();
-    } else {
-      Q.essais += 1; Q.statut = 'pasbien'; Q.choix = l;
-    }
-    dessinerQuiz();
-  }
-  function questionSuivante() {
-    Q.i += 1;
-    D.suiteQuiz = Q.i >= QUESTIONS.length ? 0 : Q.i;
-    sauver();
-    Q.statut = 'attente'; Q.choix = null; Q.indice = false; Q.essais = 0;
-    dessinerQuiz();
-  }
-  function rejouer() {
-    Q.i = 0; D.suiteQuiz = 0; sauver();
-    Q.statut = 'attente'; Q.choix = null; Q.indice = false; Q.essais = 0;
-    dessinerQuiz();
-  }
-
-  // ———————————————— 12. Écran Fiches
-  function fiches(arg) {
-    const n = Number(arg);
-    if (n >= 1 && n <= NB_NOTEES) FN = n;
-    const f = FIGS.find((x) => x.n === FN);
-    const prec = FN > 1 ? FN - 1 : null, suiv = FN < NB_NOTEES ? FN + 1 : null;
-    const puces = f.allures.map((c) => '<span class="puce-allure" data-f="' + famille(c) + '">' + ALLURES[c] + '</span>').join('') +
-      (f.note ? '' : '<span>' + mainTexte(f) + '</span>') + '<span>Coef. ' + (f.coef || 1) + '</span>';
-    const r = D.ressentis[FN] || null;
-    app.innerHTML =
-      entete('Figure ' + FN, 'sur ' + NB_NOTEES + ' · ' + P.titre, true) + modes('fiches') +
-      '<main class="fiche">' +
-        '<nav class="fiche-nav" aria-label="Figures">' +
-          '<a href="#fiches/' + (prec || 1) + '"' + (prec ? '' : ' aria-disabled="true" tabindex="-1"') + '>‹ Figure ' + (prec || '') + '</a>' +
-          '<span>' + FN + ' / ' + NB_NOTEES + '</span>' +
-          '<a href="#fiches/' + (suiv || NB_NOTEES) + '"' + (suiv ? '' : ' aria-disabled="true" tabindex="-1"') + '>Figure ' + (suiv || '') + ' ›</a>' +
-        '</nav>' +
-        '<section class="fiche-haut">' +
-          '<div class="mini" id="mini"></div>' +
-          '<div class="fiche-infos">' +
-            '<div class="fiche-lettres">' + esc(f.note ? 'Note de position' : f.lettres) + '</div>' +
-            '<div class="puces">' + puces + '</div>' +
-            '<ol class="etapes">' + f.lignes.map((ln, i) => '<li><span class="n">' + (i + 1) + '</span><span>' + (ln[0] ? '<b>' + esc(ln[0]) + '</b>' : '') + esc(ln[1]) + '</span></li>').join('') + '</ol>' +
-            (f.geo ? '<a class="btn btn-petit" href="#regarder/' + f.n + '">' + I.oeil + 'Voir en mouvement</a>' : '') +
-          '</div>' +
-        '</section>' +
-        '<section class="bloc"><h2>Ce que regarde le juge</h2><p>' + esc(f.idees) + '</p></section>' +
-        '<section class="bloc"><label class="h2" for="note-f">Mes notes</label>' +
-          '<textarea id="note-f" data-note="' + FN + '" placeholder="Écris ce qui t\'aide à t\'en souvenir…">' + esc(D.notes[FN] || '') + '</textarea>' +
-          '<div class="ressentis" role="group" aria-label="Comment tu te sens sur cette figure">' +
-            [['facile', 'Facile'], ['presque', 'Presque'], ['revoir', 'À revoir']].map((x) => '<button type="button" data-action="ressenti" data-r="' + x[0] + '" aria-pressed="' + (r === x[0]) + '">' + x[1] + '</button>').join('') +
-          '</div>' +
-          '<p class="discret">Enregistré sur cet appareil. La reprise, elle, ne change jamais.</p>' +
-        '</section>' +
-      '</main>';
-    const v = carriere({ fantome: true, centre: false, label: 'Tracé de la figure ' + FN });
-    document.getElementById('mini').appendChild(v.svg);
-    v.actives(f.set);
-    if (f.geo) {
-      v.couche('vif', morceaux(f.s0, f.s1, 'vif'));
-      v.couche('marques', T.evenements.filter((e) => e.type === 'arret' && e.s >= f.s0 - 1e-6 && e.s <= f.s1 + 1e-6).map((e) => '<circle class="m-arret" cx="' + e.x + '" cy="' + e.y + '" r="1.1"></circle>').join(''));
-      v.pion(f.s0 + 0.4);
-    } else {
-      // Note de position : on montre toutes les parties à l'allure concernée.
-      const fam = /galop/i.test(f.lignes[0][1]) ? 'galop' : 'trot';
-      v.couche('vif', T.allures.filter((a) => famille(a.code) === fam).map((a) => morceaux(a.s0, a.s1, 'plein')).join(''));
-      v.cacherPion(true);
-    }
-    ajuster = () => {};
-  }
-
-  // ———————————————— 13. Import d'un paquet (appli installée)
-  async function importerPaquet(fichier) {
-    try {
-      const texte = await fichier.text();
-      const bloc = new DOMParser().parseFromString(texte, 'text/html').getElementById('reprise-dressage');
-      if (!bloc || !bloc.textContent.trim()) throw new Error('Ce fichier n\'est pas un paquet de reprise.');
-      const p = JSON.parse(bloc.textContent);
-      if (p.format !== 'dressage-paquet/1' || !p.id || !p.trace) throw new Error('Paquet d\'un format inconnu.');
-      if (window.crypto && crypto.subtle && p.empreinte) {
-        const contenu = Object.assign({}, p);
-        delete contenu.empreinte;
-        const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(contenu)));
-        const hex = Array.from(new Uint8Array(h)).map((x) => x.toString(16).padStart(2, '0')).join('');
-        if ('sha256:' + hex !== p.empreinte) throw new Error('Paquet modifié ou abîmé : son empreinte ne correspond pas.');
-      }
-      const deja = PAQUETS[p.id];
-      PAQUETS[p.id] = p;
-      if (!enregistrerPaquets()) throw new Error('Plus de place sur le téléphone pour enregistrer la reprise.');
-      if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
-      choisirReprise(p.id);
-      annoncer((deja ? 'Reprise mise à jour : ' : 'Reprise ajoutée : ') + p.titre);
-      if (location.hash && location.hash !== '#accueil') location.hash = '#accueil'; else router();
-    } catch (e) {
-      annoncer(e && e.message ? e.message : 'Import impossible.', true);
-    }
-  }
-  document.getElementById('import-paquet').addEventListener('change', (e) => {
-    const f = e.target.files && e.target.files[0];
-    e.target.value = '';
-    if (f) importerPaquet(f);
   });
+  return out;
+}
 
-  // ———————————————— 14. Réglages et test hors-ligne
-  const dlg = document.getElementById('reglages');
-  const appareil = () => {
-    const ua = navigator.userAgent;
-    const os = /iPhone/.test(ua) ? 'iPhone' : /iPad/.test(ua) ? 'iPad' : /Android/.test(ua) ? 'Android' : /Windows/.test(ua) ? 'Windows' : /Mac OS X/.test(ua) ? 'Mac' : /Linux/.test(ua) ? 'Linux' : 'Autre';
-    const nav = /Edg\//.test(ua) ? 'Edge' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : 'Navigateur';
-    return os + ' · ' + nav;
-  };
-  function ouvrirReglages() {
-    document.getElementById('prenom').value = REG.prenom || '';
-    dlg.querySelectorAll('[data-action="theme"]').forEach((b) => b.setAttribute('aria-pressed', String((REG.theme || 'auto') === b.dataset.t)));
-    const proto = location.protocol;
-    const origine = proto === 'file:' ? 'un fichier local' : proto === 'content:' ? 'un fichier local (Android)' : proto === 'https:' ? 'un serveur sécurisé (https)' : proto === 'http:' ? 'un serveur (http)' : proto;
-    const sw = MODE === 'appli' && 'serviceWorker' in navigator ? (navigator.serviceWorker.controller ? 'actif' : 'pas encore (rouvre l\'appli)') : null;
-    const lignes = [
-      ['Utilisation', MODE === 'paquet' ? 'paquet (fichier autonome)' : (INSTALLEE ? 'appli installée' : 'appli dans le navigateur'), ''],
-      ['Ouvert depuis', origine, ''],
-      ['JavaScript', 'actif', 'ok'],
-      ['Stockage local', STOCKAGE_OK ? 'OK · ' + OUV + ' ouverture' + (OUV > 1 ? 's mémorisées' : '') : 'indisponible', STOCKAGE_OK ? 'ok' : 'ko'],
-      ['IndexedDB', 'test…', ''],
-      ['Réseau', navigator.onLine ? 'connecté (inutile ici)' : 'hors ligne', 'ok'],
-      ['Appareil', appareil(), ''],
-    ];
-    if (sw) lignes.splice(4, 0, ['Mise en cache', sw, navigator.serviceWorker.controller ? 'ok' : '']);
-    if (MODE === 'appli') lignes.splice(1, 0, ['Reprises', String(Object.keys(PAQUETS).length), '']);
-    document.getElementById('diag').innerHTML = lignes.map((l) => '<dt>' + l[0] + '</dt><dd class="' + l[2] + '"' + (l[0] === 'IndexedDB' ? ' id="diag-idb"' : '') + '>' + esc(l[1]) + '</dd>').join('');
-    try {
-      let fait = false;
-      const fin = (texte, cls) => { if (fait) return; fait = true; const e = document.getElementById('diag-idb'); if (e) { e.textContent = texte; e.className = cls; } };
-      const req = indexedDB.open('dressage-test', 1);
-      req.onsuccess = () => { req.result.close(); fin('OK', 'ok'); };
-      req.onerror = () => fin('indisponible', 'ko');
-      setTimeout(() => fin('pas de réponse', 'ko'), 2000);
-    } catch (e) {
-      const el = document.getElementById('diag-idb'); if (el) { el.textContent = 'indisponible'; el.className = 'ko'; }
+module.exports = { genererQuestions };
+return module.exports;
+})();
+const Lecture = require('./lecture');
+const Questions = require('./questions');
+// appli/js/demarrage.js
+// ———————————————— Erreurs visibles (utile pour tester sur un appareil)
+const bandeau = document.getElementById('erreur');
+const signaler = (m) => { bandeau.hidden = false; bandeau.textContent = 'Erreur : ' + m; };
+window.addEventListener('error', (e) => signaler(e.message || 'inconnue'));
+window.addEventListener('unhandledrejection', (e) => signaler(String(e.reason)));
+
+document.getElementById('sans-js').remove();
+const app = document.getElementById('app');
+app.hidden = false;
+
+// Pas de zoom au pincement sur iPhone (en plus du viewport et de touch-action, que Safari n'applique pas toujours).
+['gesturestart', 'gesturechange', 'gestureend'].forEach((t) => document.addEventListener(t, (e) => e.preventDefault(), { passive: false }));
+document.addEventListener('touchmove', (e) => { if (e.scale !== undefined && e.scale !== 1) e.preventDefault(); }, { passive: false });
+
+// appli/js/stockage.js
+// ———————————————— Stockage sur l'appareil (jamais dans le paquet)
+const lire = (cle, def) => { try { const v = localStorage.getItem(cle); return v == null ? def : JSON.parse(v); } catch (e) { return def; } };
+const ecrire = (cle, v) => { try { localStorage.setItem(cle, JSON.stringify(v)); return true; } catch (e) { return false; } };
+const VIDE = () => ({ notes: {}, ressentis: {}, quiz: {}, etoiles: 0, jours: [], suiteQuiz: 0 });
+const REG = Object.assign({ prenom: '', theme: 'auto', courante: '' }, lire('dressage:reglages', {}));
+const sauverReglages = () => ecrire('dressage:reglages', REG);
+const OUV = (Number(lire('dressage:ouvertures', 0)) || 0) + 1;
+const STOCKAGE_OK = ecrire('dressage:ouvertures', OUV) && Number(lire('dressage:ouvertures', 0)) === OUV;
+
+// ———————————————— Deux usages du même code :
+// « paquet » = fichier .html qui contient sa reprise ; « appli » = appli installée qui importe des paquets.
+const BLOC = document.getElementById('reprise-dressage').textContent.trim();
+const MODE = BLOC ? 'paquet' : 'appli';
+let PAQUETS = {};
+if (MODE === 'paquet') { const p = JSON.parse(BLOC); PAQUETS[p.id] = p; }
+else { const l = lire('dressage:paquets', {}); PAQUETS = l && typeof l === 'object' ? l : {}; }
+const enregistrerPaquets = () => (MODE === 'appli' ? ecrire('dressage:paquets', PAQUETS) : true);
+const IOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
+const INSTALLEE = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+
+const THEME_URL = new URLSearchParams(location.search).get('theme');
+const appliquerTheme = () => { document.documentElement.dataset.theme = THEME_URL || REG.theme || 'auto'; };
+appliquerTheme();
+
+// appli/js/reprise.js
+// ———————————————— La reprise courante (tout est recalculé quand on en change)
+let P = null, T = null, VB = [-5, -5, 30, 70], RATIO = 30 / 70;
+let LETTRES = {}, FIGS = [], GEO = [], NB_NOTEES = 0, ARRETS = {}, PLAQUES = [], CENTRE = [];
+let FANTOME = '', TOUT = '', CRANS = '', QUESTIONS = [], CLE = '', D = VIDE();
+const sauver = () => (CLE ? ecrire(CLE, D) : false);
+// Deux onglets ouverts sur la même reprise : on reprend les données de l'autre avant d'écrire à notre tour.
+window.addEventListener('storage', (e) => { if (CLE && e.key === CLE && e.newValue) { try { D = Object.assign(VIDE(), JSON.parse(e.newValue)); } catch (err) { /* valeur illisible : on garde la nôtre */ } } });
+let minuterie = 0;
+const sauverBientot = () => { clearTimeout(minuterie); minuterie = setTimeout(sauver, 300); };
+
+// Lecture du tracé de la reprise courante (moteur/lecture.js, partagé avec les tests).
+const ptAt = (s) => Lecture.point(T, s);
+const r2 = (v) => Math.round(v * 100) / 100;
+const trace = (s0, s1) => Lecture.chemin(T, s0, s1);
+const sAt = (t) => Lecture.abscisse(T, t);
+const tAt = (s) => Lecture.instant(T, s);
+const enArret = (t) => Lecture.enArret(T, t);
+const lettresDe = (f) => {
+  const set = {};
+  f.lignes.forEach((ln) => (ln[0].match(/[A-Z]+/g) || []).forEach((w) => w.split('').forEach((c) => { if (LETTRES[c]) set[c] = true; })));
+  return set;
+};
+const geoIndex = (s) => { for (let i = 0; i < GEO.length; i++) if (s < GEO[i].s1 - 1e-6) return i; return GEO.length - 1; };
+const ALLURES = { approche: 'Entrée', pas: 'Pas moyen', 'pas-allonge': 'Pas allongé', 'pas-libre': 'Pas libre', trot: 'Trot de travail', 'galop-d': 'Galop à droite', 'galop-g': 'Galop à gauche' };
+const famille = Lecture.famille;
+const allureA = (s) => Lecture.allure(T, s);
+const mainTexte = (f) => { const m = (x) => (x === 'G' ? 'gauche' : 'droite'); return f.main === f.mainFin ? 'Main ' + m(f.main) : 'Main ' + m(f.main) + ' → ' + m(f.mainFin); };
+const mmss = (t) => { const s = Math.max(0, Math.round(t)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+const morceaux = (a, b, mode) => {
+  let h = '';
+  T.allures.forEach((seg) => {
+    const x0 = Math.max(a, seg.s0), x1 = Math.min(b, seg.s1);
+    if (x1 - x0 > 0.02) {
+      const d = trace(x0, x1), c = 'trace t-' + seg.code;
+      if (mode === 'vif') h += '<path class="' + c + ' halo-trace" d="' + d + '"></path>';
+      h += '<path class="' + c + '" d="' + d + '"></path>';
+      if (mode !== 'suite' && famille(seg.code) === 'galop') h += '<path class="trace rail" d="' + d + '"></path>';
     }
-    document.getElementById('bloc-donnees').hidden = !P;
-    document.getElementById('bloc-reprise').hidden = !P;
-    document.getElementById('btn-retirer').hidden = MODE !== 'appli';
-    if (P) {
-      document.getElementById('infos-reprise').innerHTML = [
-        ['Reprise', P.federation + ' · ' + P.titre],
-        ['Protocole', 'version du ' + P.versionProtocole],
-        ['Paquet', 'version ' + P.version + ', publié le ' + P.publieLe],
-        ['Empreinte', P.empreinte.slice(0, 23) + '…'],
-      ].map((l) => '<dt>' + l[0] + '</dt><dd>' + esc(l[1]) + '</dd>').join('');
-    }
-    if (typeof dlg.showModal === 'function') dlg.showModal(); else dlg.setAttribute('open', '');
-  }
-  function exporter() {
-    const blob = new Blob([JSON.stringify({ format: 'dressage-notes/1', reprise: P.id, paquet: P.version, exporteLe: new Date().toISOString(), donnees: D }, null, 2)], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'notes-' + P.id + '.json';
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
-  }
-  document.getElementById('import-notes').addEventListener('change', (e) => {
-    const fichier = e.target.files && e.target.files[0];
-    if (!fichier || !P) return;
-    const lecteur = new FileReader();
-    lecteur.onload = () => {
-      try {
-        const j = JSON.parse(lecteur.result);
-        if (j.reprise !== P.id) { alert('Ces notes appartiennent à une autre reprise (' + j.reprise + ').'); return; }
-        D = Object.assign(VIDE(), j.donnees || {});
-        sauver();
-        dlg.close();
-        router();
-      } catch (err) { alert('Fichier de notes illisible.'); }
-    };
-    lecteur.readAsText(fichier);
-    e.target.value = '';
   });
-  document.getElementById('prenom').addEventListener('input', (e) => { REG.prenom = e.target.value.trim(); sauverReglages(); });
-  dlg.addEventListener('close', () => { if (!location.hash || location.hash === '#accueil') accueil(); });
+  return h;
+};
+const marques = (sMax) => T.evenements
+  .filter((e) => e.s <= sMax + 1e-6 && !(e.type === 'transition' && ARRETS[e.s]))
+  .map((e) => (e.type === 'arret'
+    ? '<circle class="m-arret" cx="' + e.x + '" cy="' + e.y + '" r="0.95"></circle>'
+    : '<circle class="m-tr t-' + e.code + '" cx="' + e.x + '" cy="' + e.y + '" r="0.6"></circle>'))
+  .join('');
 
-  // ———————————————— 15. Actions et navigation
-  const ACTIONS = {
-    reglages: ouvrirReglages,
-    theme: (b) => { REG.theme = b.dataset.t; sauverReglages(); appliquerTheme(); dlg.querySelectorAll('[data-action="theme"]').forEach((x) => x.setAttribute('aria-pressed', String(x === b))); },
-    exporter,
-    effacer: () => { if (P && confirm('Effacer tes notes, tes étoiles et ta progression pour cette reprise, sur cet appareil ?')) { D = VIDE(); sauver(); Q.i = 0; dlg.close(); router(); } },
-    retirer: () => {
-      if (!P || !confirm('Retirer « ' + P.titre + ' » de l\'appli ? Tes notes sont gardées si tu la réimportes.')) return;
-      delete PAQUETS[P.id];
-      enregistrerPaquets();
-      const reste = Object.keys(PAQUETS);
-      if (reste.length) choisirReprise(reste[0]); else { P = null; CLE = ''; REG.courante = ''; sauverReglages(); }
-      dlg.close();
-      if (location.hash && location.hash !== '#accueil') location.hash = '#accueil'; else router();
+const R = { t: 0, lecture: false, vitesse: 2, pauseFig: false, raf: 0, dernier: 0, stopA: null, gi: -1, fin: null, allure: '', vue: null };
+const Q = { i: 0, statut: 'attente', choix: null, indice: false, essais: 0, premier: false, vue: null };
+let FN = 1;
+
+function choisirReprise(id) {
+  const p = PAQUETS[id];
+  if (!p) { P = null; CLE = ''; return false; }
+  P = p; T = p.trace;
+  VB = [-5, -5, T.W + 10, T.L + 10]; RATIO = VB[2] / VB[3];
+  LETTRES = {}; T.lettres.forEach((l) => { LETTRES[l.n] = l; });
+  FIGS = p.figures.map((f) => Object.assign({}, f, { geo: f.s1 - f.s0 > 0.01, set: lettresDe(f) }));
+  GEO = FIGS.filter((f) => f.geo);
+  NB_NOTEES = FIGS.filter((f) => !f.sortie).length;
+  ARRETS = {}; T.evenements.forEach((e) => { if (e.type === 'arret') ARRETS[e.s] = true; });
+  PLAQUES = T.lettres.map((l) => {
+    if (l.x === 0) return { n: l.n, x: -2.7, y: l.y };
+    if (l.x === T.W) return { n: l.n, x: T.W + 2.7, y: l.y };
+    if (l.y === 0) return { n: l.n, x: l.x, y: -2.7 };
+    if (l.y === T.L) return { n: l.n, x: l.x, y: T.L + 2.7 };
+    return null;
+  }).filter(Boolean);
+  CENTRE = T.lettres.filter((l) => l.x !== 0 && l.x !== T.W && l.y !== 0 && l.y !== T.L);
+  FANTOME = T.allures.map((a) => '<path class="trace fantome" d="' + trace(a.s0, a.s1) + '"></path>').join('');
+  TOUT = morceaux(0, T.total, 'plein');
+  CRANS = GEO.slice(1).map((f) => '<span class="cran" style="left:' + (100 * tAt(f.s0) / T.duree).toFixed(2) + '%"></span>').join('');
+  CLE = 'dressage:' + p.id;
+  D = Object.assign(VIDE(), lire(CLE, {}));
+  QUESTIONS = Questions.genererQuestions(P);
+  R.t = 0; R.gi = -1; R.fin = null;
+  Q.i = Math.min(Number(D.suiteQuiz) || 0, QUESTIONS.length);
+  FN = 1;
+  if (MODE === 'appli' && REG.courante !== id) { REG.courante = id; sauverReglages(); }
+  return true;
+}
+
+// Figures « sues » : bonne réponse du premier coup au quiz (questions : moteur/questions.js).
+const nbSues = () => QUESTIONS.filter((q) => D.quiz[q.fig.n] && D.quiz[q.fig.n].ok).length;
+
+// appli/js/carriere.js
+// ———————————————— Dessin de la carrière (SVG)
+const NS = 'http://www.w3.org/2000/svg';
+function carriere(o) {
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', (o.viewBox || VB).join(' '));
+  svg.setAttribute('class', 'carriere' + (o.classe ? ' ' + o.classe : ''));
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', o.label || 'Carrière de ' + T.W + ' sur ' + T.L + ' mètres');
+  svg.innerHTML =
+    '<rect class="lice-ext" x="-0.45" y="-0.45" width="' + (T.W + 0.9) + '" height="' + (T.L + 0.9) + '" rx="0.8"></rect>' +
+    '<rect class="sol" x="0" y="0" width="' + T.W + '" height="' + T.L + '" rx="0.5"></rect>' +
+    '<line class="milieu" x1="' + T.W / 2 + '" y1="0.7" x2="' + T.W / 2 + '" y2="' + (T.L - 0.7) + '"></line>' +
+    '<g class="c-centre">' + (o.centre === false ? '' : CENTRE.map((l) => '<circle cx="' + l.x + '" cy="' + l.y + '" r="0.3"></circle><text x="' + (l.x + 0.7) + '" y="' + (l.y + 0.55) + '">' + l.n + '</text>').join('')) + '</g>' +
+    '<g class="c-fantome">' + (o.fantome ? FANTOME : '') + '</g>' +
+    '<g class="c-faits">' + (o.tout ? TOUT : '') + '</g><g class="c-suite"></g><g class="c-vif"></g><g class="c-marques"></g>' +
+    '<g class="c-lettres">' + (o.lettres === false ? '' : PLAQUES.map((p) => '<g class="plaque" data-l="' + p.n + '"><rect x="' + (p.x - 1.8) + '" y="' + (p.y - 1.8) + '" width="3.6" height="3.6" rx="0.5"></rect><text x="' + p.x + '" y="' + (p.y + 0.95) + '" text-anchor="middle">' + p.n + '</text></g>').join('')) + '</g>' +
+    '<g class="c-pion"' + (o.pion === false ? ' display="none"' : '') + '><g class="pion"><circle class="halo" r="2.4"></circle><path d="M2.15 0L0.42 -1.24A1.3 1.3 0 1 0 0.42 1.24Z"></path><circle class="coeur" cx="-0.15" cy="0" r="0.42"></circle></g></g>';
+  const g = (n) => svg.querySelector('.c-' + n);
+  const pion = svg.querySelector('.pion');
+  return {
+    svg,
+    couche: (n, html) => { g(n).innerHTML = html; },
+    actives: (set) => svg.querySelectorAll('.plaque').forEach((p) => p.classList.toggle('active', !!set[p.dataset.l])),
+    pion: (s) => {
+      const p = ptAt(s), a = ptAt(Math.max(0, s - 0.4)), b = ptAt(Math.min(T.total, s + 0.4));
+      const ang = Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI;
+      pion.setAttribute('transform', 'translate(' + r2(p[0]) + ' ' + r2(p[1]) + ') rotate(' + Math.round(ang) + ')');
     },
-    'importer-paquet': () => document.getElementById('import-paquet').click(),
-    'choisir-reprise': (b) => { arreter(); choisirReprise(b.dataset.id); router(); },
-    lecture,
-    precedente: () => { const s = sAt(R.t), i = geoIndex(s + 1e-3); allerFig(s - GEO[i].s0 > 3 ? i : i - 1); },
-    suivante: () => allerFig(geoIndex(sAt(R.t) + 1e-3) + 1),
-    vitesse: (b) => { const o = [1, 2, 4]; R.vitesse = o[(o.indexOf(R.vitesse) + 1) % o.length]; b.textContent = '×' + R.vitesse; },
-    'pause-figure': (b) => { R.pauseFig = !R.pauseFig; b.setAttribute('aria-pressed', String(R.pauseFig)); },
-    aller: (b) => allerFig(GEO.findIndex((f) => f.n === Number(b.dataset.n))),
-    lettre: (b) => repondre(b.dataset.l),
-    indice: () => { Q.indice = true; dessinerQuiz(); },
-    'question-suivante': questionSuivante,
-    rejouer,
-    ressenti: (b) => {
-      const r = b.dataset.r;
-      D.ressentis[FN] = D.ressentis[FN] === r ? null : r;
-      sauver();
-      b.parentNode.querySelectorAll('button').forEach((x) => x.setAttribute('aria-pressed', String(D.ressentis[FN] === x.dataset.r)));
-    },
+    cacherPion: (oui) => { svg.querySelector('.c-pion').style.display = oui ? 'none' : ''; },
   };
-  document.addEventListener('click', (e) => {
-    const b = e.target.closest('[data-action]');
-    if (!b || b.disabled) return;
-    const f = ACTIONS[b.dataset.action];
-    if (f) { e.preventDefault(); f(b); }
-  });
-  app.addEventListener('input', (e) => {
-    const el = e.target;
-    if (el.dataset && el.dataset.note) {
-      const n = el.dataset.note;
-      if (el.value.trim()) D.notes[n] = el.value; else delete D.notes[n];
-      sauverBientot();
-    }
-  });
+}
 
-  function router() {
-    arreter();
-    const parts = (location.hash.slice(1) || 'accueil').split('/');
-    const ecrans = { accueil, regarder, deviner, fiches };
-    const ecran = P ? (ecrans[parts[0]] || accueil) : accueil;
-    ecran(parts[1]);
+// Taille de la carrière : le plus grand possible dans la place disponible,
+// recalculée dès que la zone change (contenu de la carte, rotation, polices).
+let ajuster = () => {};
+window.addEventListener('resize', () => ajuster());
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => ajuster());
+const grandEcran = () => window.matchMedia('(min-width: 900px)').matches;
+let observateur = null;
+function suivreTaille(racine) {
+  if (observateur) observateur.disconnect();
+  observateur = null;
+  if (typeof ResizeObserver === 'undefined') return;
+  observateur = new ResizeObserver(() => ajuster());
+  observateur.observe(racine);
+  const scene = racine.querySelector('.scene');
+  if (scene && getComputedStyle(scene).display !== 'contents') observateur.observe(scene);
+}
+function ajusterScene(racine) {
+  const inn = racine.querySelector('.plateau-in'), svg = inn && inn.querySelector('svg');
+  if (!svg) return;
+  const scene = racine.querySelector('.scene');
+  let h, wMax;
+  if (grandEcran() && racine.classList.contains('regarder')) { h = racine.clientHeight - 14; wMax = racine.clientWidth * 0.34; }
+  else { h = scene.clientHeight - 14; wMax = scene.clientWidth * 0.56; }
+  let H = Math.max(160, h), W = H * RATIO;
+  if (W > wMax) { W = wMax; H = W / RATIO; }
+  inn.style.width = W + 'px'; inn.style.height = H + 'px';
+  svg.setAttribute('width', W); svg.setAttribute('height', H);
+  racine.style.setProperty('--plateau-l', (W + 14) + 'px');
+}
+
+// appli/js/icones.js
+// ———————————————— Icônes
+const ic = (d) => '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + d + '</svg>';
+const I = {
+  retour: ic('<path d="M15 18l-6-6 6-6"/>'),
+  reglages: ic('<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>'),
+  etoile: '<svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M12 2.6l2.9 5.9 6.5.95-4.7 4.6 1.1 6.5L12 17.5l-5.8 3.05 1.1-6.5L2.6 9.45l6.5-.95z"/></svg>',
+  lecture: '<svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor" aria-hidden="true"><path d="M8 5.2v13.6a1 1 0 0 0 1.5.86l10.6-6.8a1 1 0 0 0 0-1.72L9.5 4.34A1 1 0 0 0 8 5.2z"/></svg>',
+  pause: '<svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4.2" height="14" rx="1.2"/><rect x="13.8" y="5" width="4.2" height="14" rx="1.2"/></svg>',
+  prec: ic('<path d="M19 19.5L9 12l10-7.5z" fill="currentColor"/><path d="M5 5v14"/>'),
+  suiv: ic('<path d="M5 4.5L15 12 5 19.5z" fill="currentColor"/><path d="M19 5v14"/>'),
+  drapeau: ic('<path d="M5 21V4"/><path d="M5 4.5h11.5l-2.2 4 2.2 4H5"/>'),
+  oeil: ic('<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'),
+  question: ic('<circle cx="12" cy="12" r="9.5"/><path d="M9.2 9.2a2.9 2.9 0 0 1 5.6 1c0 1.9-2.8 2.6-2.8 4"/><path d="M12 17.4h.01"/>'),
+  livre: ic('<path d="M2.5 5h6a3.5 3.5 0 0 1 3.5 3.5V20a2.6 2.6 0 0 0-2.6-2.6H2.5z"/><path d="M21.5 5h-6A3.5 3.5 0 0 0 12 8.5V20a2.6 2.6 0 0 1 2.6-2.6h6.9z"/>'),
+  cadenas: ic('<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>'),
+  fer: ic('<path d="M6.5 4v8a5.5 5.5 0 0 0 11 0V4"/><path d="M4.8 4h3.4M15.8 4h3.4"/>'),
+  ampoule: ic('<path d="M9 18h6M10 21.5h4"/><path d="M12 2.5a6.5 6.5 0 0 0-4 11.6c.7.6 1 1.4 1 2.4h6c0-1 .3-1.8 1-2.4a6.5 6.5 0 0 0-4-11.6z"/>'),
+  ok: ic('<path d="M4.5 12.5l5 5L19.5 7"/>'),
+  fermer: ic('<path d="M6 6l12 12M18 6L6 18"/>'),
+  rejouer: ic('<path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/>'),
+  fleche: ic('<path d="M5 12h14M13 6l6 6-6 6"/>'),
+  importer: ic('<path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 17v2.5A1.5 1.5 0 0 0 5.5 21h13a1.5 1.5 0 0 0 1.5-1.5V17"/>'),
+  partager: ic('<path d="M12 3v12M8 7l4-4 4 4"/><path d="M5 11v8.5A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V11"/>'),
+};
+document.getElementById('fermer-reglages').innerHTML = I.fermer;
+
+// appli/js/semaine.js
+// ———————————————— Jours d'entraînement
+const jourISO = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+const marquerJour = () => { const j = jourISO(new Date()); if (D.jours.indexOf(j) < 0) { D.jours.push(j); D.jours = D.jours.slice(-200); sauver(); } };
+function semaine() {
+  const auj = new Date(); auj.setHours(12, 0, 0, 0);
+  const lundi = new Date(auj); lundi.setDate(auj.getDate() - ((auj.getDay() + 6) % 7));
+  const jours = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(lundi); d.setDate(lundi.getDate() + i);
+    const iso = jourISO(d);
+    jours.push({ l: 'LMMJVSD'[i], fait: D.jours.indexOf(iso) >= 0, auj: iso === jourISO(auj) });
   }
-  window.addEventListener('hashchange', router);
+  let serie = 0;
+  const d = new Date(auj);
+  if (D.jours.indexOf(jourISO(d)) < 0) d.setDate(d.getDate() - 1);
+  while (D.jours.indexOf(jourISO(d)) >= 0) { serie++; d.setDate(d.getDate() - 1); }
+  const texte = serie >= 2 ? serie + ' jours d\'affilée, continue !' : serie === 1 ? '1 jour, on enchaîne ?' : 'Lance-toi aujourd\'hui';
+  return { jours, texte };
+}
 
-  // ———————————————— 16. Démarrage
+// appli/js/interface.js
+// ———————————————— Morceaux d'interface communs
+const entete = (titre, sous, retour) =>
+  '<header class="barre">' +
+    (retour ? '<a class="bouton-icone" href="#accueil" aria-label="Retour à l\'accueil">' + I.retour + '</a>' : '') +
+    '<div class="titres"><h1>' + esc(titre) + '</h1><p>' + esc(sous) + '</p></div>' +
+    (P ? '<span class="etoiles" title="Étoiles gagnées au quiz">' + I.etoile + '<span id="nb-etoiles">' + D.etoiles + '</span></span>' : '') +
+    '<button type="button" class="bouton-icone" data-action="reglages" aria-label="Réglages et test hors-ligne">' + I.reglages + '</button>' +
+  '</header>';
+const modes = (actif) => '<nav class="modes" aria-label="Modes">' +
+  [['regarder', 'Regarder'], ['deviner', 'Deviner'], ['fiches', 'Fiches']].map((m) =>
+    '<a href="#' + m[0] + '"' + (m[0] === actif ? ' aria-current="page"' : '') + '>' + m[1] + '</a>').join('') + '</nav>';
+const majEtoiles = () => { const e = document.getElementById('nb-etoiles'); if (e) e.textContent = D.etoiles; };
+const astuceInstallation = () => (MODE === 'appli' && IOS && !INSTALLEE
+  ? '<p class="astuce">' + I.partager + '<span>Pour l\'avoir aussi sans réseau : touche <b>Partager</b> dans Safari, puis <b>Sur l\'écran d\'accueil</b>.</span></p>'
+  : '');
+let toastMinuterie = 0;
+function annoncer(texte, erreur) {
+  const t = document.getElementById('toast');
+  t.textContent = texte; t.className = 'toast' + (erreur ? ' ko' : ''); t.hidden = false;
+  clearTimeout(toastMinuterie);
+  toastMinuterie = setTimeout(() => { t.hidden = true; }, erreur ? 6000 : 3500);
+}
+
+// appli/js/accueil.js
+// ———————————————— Écran Accueil (et bienvenue quand l'appli est vide)
+function bienvenue() {
+  app.innerHTML =
+    entete('Ma reprise', 'Apprends ta reprise par cœur', false) +
+    '<main class="accueil">' +
+      astuceInstallation() +
+      '<section class="bienvenue">' +
+        '<h2>Ajoute ta reprise</h2>' +
+        '<p>Ta reprise arrive sous forme d\'un fichier <b>.html</b> préparé sur l\'ordinateur. Une fois importée, elle reste dans l\'appli, même sans réseau.</p>' +
+        '<ol><li>Dans Mail, touche la pièce jointe, puis <b>Partager → Enregistrer dans Fichiers</b>.</li><li>Ici, touche <b>Importer un paquet</b> et choisis le fichier.</li></ol>' +
+        '<button type="button" class="btn btn-principal" data-action="importer-paquet">' + I.importer + 'Importer un paquet</button>' +
+      '</section>' +
+      '<p class="pied">' + I.cadenas + '<span>Rien ne quitte ton téléphone · <button type="button" data-action="reglages">Réglages et test</button></span></p>' +
+    '</main>';
+  ajuster = () => {};
+}
+
+function accueil() {
+  if (!P) { bienvenue(); return; }
+  const sues = nbSues(), sem = semaine();
+  const ech = (cls, style) => '<svg viewBox="0 0 22 8" width="22" height="8" aria-hidden="true"><path class="trace ' + cls + '" d="M2 4H20" style="' + style + '"></path></svg>';
   const ids = Object.keys(PAQUETS);
-  if (ids.length) choisirReprise(PAQUETS[REG.courante] ? REG.courante : ids[0]);
-  router();
-  if (MODE === 'appli' && 'serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
-    navigator.serviceWorker.register('./sw.js').catch(() => { /* hors-ligne indisponible, l'appli marche quand même */ });
+  const mesReprises = MODE === 'appli'
+    ? '<section class="mes-reprises" aria-label="Mes reprises"><h2>Mes reprises</h2>' +
+        (ids.length > 1 ? '<ul class="liste-reprises">' + ids.map((id) => { const p = PAQUETS[id]; return '<li><button type="button" data-action="choisir-reprise" data-id="' + esc(id) + '" aria-current="' + (id === P.id) + '"><b>' + esc(p.titre) + '</b><span>' + esc(p.federation) + ' · v' + p.version + '</span></button></li>'; }).join('') + '</ul>' : '') +
+        '<button type="button" class="btn" data-action="importer-paquet">' + I.importer + 'Importer un paquet</button></section>'
+    : '';
+  app.innerHTML =
+    entete(REG.prenom ? 'Salut ' + REG.prenom + ' !' : 'Salut !', 'On révise ta reprise ?', false) +
+    '<main class="accueil">' +
+      astuceInstallation() +
+      '<section class="carte-reprise" aria-label="Ma reprise">' +
+        '<div class="vignette" id="vignette"></div>' +
+        '<div class="infos">' +
+          '<div class="sur-titre">' + esc(P.federation) + ' · protocole du ' + esc(P.versionProtocole) + '</div>' +
+          '<h2>' + esc(P.titre) + '</h2>' +
+          '<div class="puces"><span>' + T.W + ' × ' + T.L + '</span><span>' + NB_NOTEES + ' figures</span><span>≈ ' + Math.round(T.duree / 60) + ' min</span></div>' +
+          '<ul class="legende">' +
+            '<li>' + ech('t-pas', 'stroke-width:3.2;stroke-dasharray:.01 5') + 'Pas</li>' +
+            '<li>' + ech('t-trot', 'stroke-width:3.2') + 'Trot</li>' +
+            '<li><svg viewBox="0 0 22 8" width="22" height="8" aria-hidden="true"><path class="trace t-galop-d" d="M2 4H20" style="stroke-width:4.4"></path><path class="trace rail" d="M2 4H20" style="stroke-width:1.3"></path></svg>Galop</li>' +
+            '<li><svg viewBox="0 0 22 8" width="22" height="8" aria-hidden="true"><circle cx="11" cy="4" r="3.3" style="fill:var(--arret)"></circle></svg>Arrêt</li>' +
+          '</ul>' +
+          '<div class="sues"><div class="sues-ligne"><span>Figures sues</span><b>' + sues + ' / ' + QUESTIONS.length + '</b></div>' +
+            '<div class="jauge"><div style="width:' + Math.round(100 * sues / Math.max(1, QUESTIONS.length)) + '%"></div></div></div>' +
+        '</div>' +
+        '<div class="actions">' +
+          '<a class="btn btn-principal" href="#regarder">' + I.oeil + 'Regarder le parcours</a>' +
+          '<a class="btn" href="#deviner">' + I.question + 'Deviner</a>' +
+          '<a class="btn" href="#fiches/1">' + I.livre + 'Fiches</a>' +
+        '</div>' +
+      '</section>' +
+      '<section class="semaine" aria-label="Ma semaine">' +
+        '<div class="semaine-titre"><h2>Ma semaine</h2><span>' + sem.texte + '</span></div>' +
+        '<ol>' + sem.jours.map((j) => '<li><span class="jour' + (j.fait ? ' fait' : '') + (j.auj ? ' auj' : '') + '">' + (j.fait ? I.fer : '') + '</span>' + j.l + '</li>').join('') + '</ol>' +
+      '</section>' +
+      mesReprises +
+      '<p class="pied">' + I.cadenas + '<span>' + (MODE === 'paquet' ? 'Paquet hors-ligne v' + P.version + ' · tes notes restent sur cet appareil' : 'Hors-ligne · tes notes restent sur ce téléphone') + ' · <button type="button" data-action="reglages">Réglages et test</button></span></p>' +
+    '</main>';
+  const v = carriere({ tout: true, centre: false, lettres: false, pion: false, classe: 'vignette-svg', viewBox: [-1, -1, T.W + 2, T.L + 2], label: 'Tracé complet de la reprise' });
+  document.getElementById('vignette').appendChild(v.svg);
+  ajuster = () => {};
+}
+
+// appli/js/regarder.js
+// ———————————————— Écran Regarder
+function regarder(arg) {
+  const n = Number(arg);
+  if (n) { const i = GEO.findIndex((x) => x.n === n); if (i >= 0) R.t = tAt(GEO[i].s0 + 0.05); }
+  app.innerHTML =
+    entete(P.titre, 'Carrière ' + T.W + ' × ' + T.L + ' · ' + NB_NOTEES + ' figures', true) + modes('regarder') +
+    '<main class="regarder">' +
+      '<div class="scene"><div class="plateau"><div class="plateau-in" id="plateau-in"></div></div><ol class="chemin" id="chemin" aria-label="Chemin des figures"></ol></div>' +
+      '<section class="carte" id="carte" aria-live="polite"></section>' +
+      '<div class="progression"><span id="chrono">0:00</span><div class="piste-prog"><div class="rempli" id="rempli"></div>' + CRANS + '</div><span>' + mmss(T.duree) + '</span></div>' +
+      '<div class="commandes">' +
+        '<button type="button" class="rond" data-action="precedente" aria-label="Figure précédente">' + I.prec + '</button>' +
+        '<button type="button" class="lecture" data-action="lecture" id="btn-lecture"></button>' +
+        '<button type="button" class="rond" data-action="suivante" aria-label="Figure suivante">' + I.suiv + '</button>' +
+        '<button type="button" class="rond" data-action="vitesse" id="btn-vitesse" aria-label="Vitesse de lecture">×' + R.vitesse + '</button>' +
+        '<button type="button" class="rond" data-action="pause-figure" id="btn-pause-fig" aria-pressed="' + R.pauseFig + '" aria-label="S\'arrêter à la fin de chaque figure">' + I.drapeau + '</button>' +
+      '</div>' +
+      '<div class="bas" id="bas"></div>' +
+    '</main>';
+  R.vue = carriere({ fantome: true });
+  document.getElementById('plateau-in').appendChild(R.vue.svg);
+  R.gi = -1; R.fin = null; R.allure = '';
+  const racine = app.querySelector('.regarder');
+  ajuster = () => ajusterScene(racine);
+  majBoutonLecture();
+  dessiner();
+  ajuster();
+  suivreTaille(racine);
+}
+
+function dessiner() {
+  const v = R.vue;
+  if (!v || !document.getElementById('carte')) return;
+  const s = sAt(R.t), fin = R.t >= T.duree - 0.01, gi = geoIndex(s + 1e-3), cf = GEO[gi], arret = enArret(R.t);
+  const montre = fin ? FIGS[FIGS.length - 1] : cf;
+  if (gi !== R.gi || fin !== R.fin) {
+    R.gi = gi; R.fin = fin; R.allure = '';
+    v.couche('faits', morceaux(0, cf.s0, 'faits'));
+    v.couche('marques', marques(cf.s1));
+    v.actives(cf.set);
+    remplirChemin(montre, s, fin);
+    remplirCarte(montre, fin);
+    remplirBas(montre);
   }
+  v.couche('vif', morceaux(cf.s0, s, 'vif'));
+  v.couche('suite', fin ? '' : morceaux(s, cf.s1, 'suite'));
+  v.pion(s);
+  const code = arret ? 'arret' : allureA(s);
+  if (code !== R.allure && !fin) {
+    R.allure = code;
+    const p = document.getElementById('puce-allure');
+    if (p) { p.textContent = arret ? 'Arrêt' : ALLURES[code]; p.dataset.f = arret ? 'arret' : famille(code); }
+  }
+  document.getElementById('rempli').style.width = (100 * R.t / T.duree).toFixed(2) + '%';
+  document.getElementById('chrono').textContent = mmss(R.t);
+}
+
+function remplirChemin(cur, s, fin) {
+  const ol = document.getElementById('chemin');
+  ol.innerHTML = FIGS.map((f) => {
+    const actuel = f === cur;
+    const fait = !actuel && (fin || (f.geo ? f.s1 <= s + 1e-6 : f.s0 < s - 1e-6));
+    const coul = f.allures.length ? 'var(--' + famille(f.allures[f.allures.length - 1]) + ')' : 'var(--approche)';
+    const cls = [actuel ? 'actuel' : '', fait ? 'fait' : '', f.note ? 'note' : ''].join(' ').trim();
+    const l1 = f.note ? 'Note' : f.sortie ? 'Sortie' : esc(f.lettres.replace(/ · /g, '·').replace(/ – /g, '–'));
+    const l2 = esc(f.note ? f.court.replace('Note : ', '') : f.court);
+    return '<li class="' + cls + '" style="--c:' + coul + '"><button type="button" data-action="aller" data-n="' + f.n + '"' + (f.geo ? '' : ' disabled') + (actuel ? ' aria-current="step"' : '') + '>' +
+      '<span class="num">' + (f.sortie ? 'FIN' : f.n) + '</span><span class="txt"><span class="l1">' + l1 + '</span><span class="l2">' + l2 + '</span></span></button></li>';
+  }).join('');
+  const li = ol.querySelector('.actuel');
+  if (li) ol.scrollTop = Math.max(0, li.offsetTop - ol.clientHeight / 2 + li.offsetHeight / 2);
+}
+
+function remplirCarte(f, fin) {
+  document.getElementById('carte').innerHTML =
+    '<div class="grand-num' + (fin ? ' fin' : '') + '">' + (fin ? 'FIN' : f.n) + '</div>' +
+    '<div class="corps">' +
+      '<div class="etiquette">' + (fin ? '<span>Reprise terminée, bravo !</span>' : '<span class="pc">Figure ' + f.n + ' sur ' + NB_NOTEES + '</span><span class="puce-allure" id="puce-allure"></span>') + '<span class="main">' + mainTexte(f) + '</span></div>' +
+      f.lignes.map((ln) => '<div class="ligne">' + (ln[0] ? '<b>' + esc(ln[0]) + '</b>' : '') + esc(ln[1]) + '</div>').join('') +
+    '</div>';
+}
+
+function remplirBas(f) {
+  document.getElementById('bas').innerHTML =
+    '<section class="bloc"><h2>Ce que regarde le juge</h2><p>' + esc(f.idees || 'Pas de note pour la sortie : on quitte la piste au pas libre, les rênes longues.') + '</p>' +
+      (f.sortie ? '' : '<p class="discret">Coefficient ' + (f.coef || 1) + ' · noté sur 10</p>') + '</section>' +
+    '<section class="bloc"><label class="h2" for="note-r">Mes notes · figure ' + f.n + '</label>' +
+      '<textarea id="note-r" data-note="' + f.n + '" placeholder="Ce qui t\'aide à t\'en souvenir…">' + esc(D.notes[f.n] || '') + '</textarea>' +
+      '<p class="discret">Enregistré sur cet appareil.</p></section>';
+}
+
+function majBoutonLecture() {
+  const b = document.getElementById('btn-lecture');
+  if (!b) return;
+  b.innerHTML = R.lecture ? I.pause : I.lecture;
+  b.setAttribute('aria-label', R.lecture ? 'Mettre en pause' : 'Lancer le parcours');
+}
+function tic(maintenant) {
+  if (!R.dernier) R.dernier = maintenant;
+  const dt = Math.min(0.1, (maintenant - R.dernier) / 1000);
+  R.dernier = maintenant;
+  let t = R.t + dt * R.vitesse, stop = false;
+  if (R.stopA !== null && t >= R.stopA) { t = R.stopA; stop = true; }
+  if (t >= T.duree) { t = T.duree; stop = true; }
+  R.t = t;
+  dessiner();
+  if (stop) { R.lecture = false; R.raf = 0; majBoutonLecture(); }
+  else R.raf = requestAnimationFrame(tic);
+}
+function lecture() {
+  if (R.lecture) { arreter(); return; }
+  if (R.t >= T.duree - 0.01) R.t = 0;
+  R.stopA = R.pauseFig ? tAt(GEO[geoIndex(sAt(R.t) + 0.05)].s1 - 0.05) : null;
+  R.lecture = true; R.dernier = 0;
+  marquerJour();
+  majBoutonLecture();
+  R.raf = requestAnimationFrame(tic);
+}
+function arreter() {
+  if (R.raf) cancelAnimationFrame(R.raf);
+  R.raf = 0;
+  if (R.lecture) { R.lecture = false; majBoutonLecture(); }
+}
+function allerFig(i) {
+  arreter();
+  R.t = i >= GEO.length ? T.duree : tAt(GEO[Math.max(0, i)].s0 + 0.05);
+  dessiner();
+}
+
+// appli/js/deviner.js
+// ———————————————— Écran Deviner
+function deviner() {
+  Q.statut = 'attente'; Q.choix = null; Q.indice = false; Q.essais = 0;
+  app.innerHTML =
+    entete(P.titre, 'Et ensuite ?', true) + modes('deviner') +
+    '<main class="deviner">' +
+      '<div class="scene"><div class="plateau"><div class="plateau-in" id="plateau-in"><div class="superpose" id="superpose"></div></div></div><div class="question" id="question"></div></div>' +
+      '<section class="retour" id="retour" aria-live="polite"></section>' +
+      '<div class="commandes-quiz" id="cmd-quiz"></div>' +
+    '</main>';
+  Q.vue = carriere({ lettres: false, classe: 'quiz', label: 'Carrière : ce que tu as déjà fait' });
+  const inn = document.getElementById('plateau-in');
+  inn.insertBefore(Q.vue.svg, inn.firstChild);
+  document.getElementById('superpose').innerHTML = PLAQUES.map((p) =>
+    '<button type="button" class="lettre-btn" data-action="lettre" data-l="' + p.n + '" style="left:' + ((p.x - VB[0]) / VB[2] * 100).toFixed(2) + '%;top:' + ((p.y - VB[1]) / VB[3] * 100).toFixed(2) + '%" aria-label="Lettre ' + p.n + '">' + p.n + '</button>').join('');
+  const racine = app.querySelector('.deviner');
+  ajuster = () => ajusterScene(racine);
+  dessinerQuiz();
+  ajuster();
+  suivreTaille(racine);
+}
+
+function dessinerQuiz() {
+  const v = Q.vue, fini = Q.i >= QUESTIONS.length;
+  const zoneQ = document.getElementById('question'), retour = document.getElementById('retour'), cmd = document.getElementById('cmd-quiz');
+  app.querySelectorAll('.lettre-btn').forEach((b) => { b.classList.remove('juste', 'faux'); b.disabled = fini; });
+  if (fini) {
+    v.couche('faits', ''); v.couche('vif', TOUT); v.couche('marques', marques(T.total)); v.pion(T.total);
+    const sues = nbSues();
+    zoneQ.innerHTML = '<div class="compteur">Série terminée</div><p class="enonce">Tu connais ' + sues + ' figure' + (sues > 1 ? 's' : '') + ' sur ' + QUESTIONS.length + ' du premier coup.</p><div class="sues-mini">' + I.etoile + ' ' + D.etoiles + ' étoiles au total</div>';
+    retour.className = 'retour bien';
+    retour.innerHTML = '<span class="pastille">' + I.ok + '</span><div><b>Bien joué !</b><p>Rejoue la série pour décrocher les figures qui manquent.</p></div>';
+    cmd.innerHTML = '<button type="button" class="btn btn-principal" data-action="rejouer">' + I.rejouer + 'Rejouer la série</button>';
+    return;
+  }
+  const q = QUESTIONS[Q.i], f = q.fig, av = q.avant, bien = Q.statut === 'bien';
+  v.couche('faits', av ? morceaux(0, bien ? av.s1 : av.s1 - 1.0, 'plein') : '');
+  v.couche('vif', bien ? morceaux(f.s0, f.s1, 'vif') : '');
+  v.couche('marques', marques(bien ? f.s1 : (av ? av.s1 : 0)));
+  // Avant la réponse, le poney s'arrête un peu avant la lettre : le début du virage trahirait la réponse.
+  v.pion(bien ? f.s1 - 0.3 : (av ? av.s1 - 1.2 : 0));
+  app.querySelectorAll('.lettre-btn').forEach((b) => {
+    if (bien && b.dataset.l === q.rep) b.classList.add('juste');
+    if (Q.statut === 'pasbien' && b.dataset.l === Q.choix) b.classList.add('faux');
+  });
+  zoneQ.innerHTML =
+    '<div class="compteur">Question ' + (Q.i + 1) + ' sur ' + QUESTIONS.length + '</div>' +
+    '<div class="contexte">' + esc(q.contexte) + '</div>' +
+    '<p class="enonce">' + esc(q.question) + '</p>' +
+    (bien ? '' : '<button type="button" class="btn btn-petit" data-action="indice">' + I.ampoule + 'Un indice ?</button>') +
+    (Q.indice && !bien ? '<p class="indice">' + esc(q.indice) + '</p>' : '') +
+    '<div class="sues-mini">' + I.etoile + nbSues() + ' / ' + QUESTIONS.length + ' figures sues</div>';
+  retour.className = 'retour ' + Q.statut;
+  retour.innerHTML = bien
+    ? '<span class="pastille">' + I.ok + '</span><div><b>Bien vu, c\'est ' + q.rep + ' !</b><p>' + esc(q.bravo) + (Q.premier ? ' +1 étoile.' : '') + '</p></div>'
+    : Q.statut === 'pasbien'
+      ? '<span class="pastille">!</span><div><b>Pas tout à fait…</b><p>' + Q.choix + ' n\'est pas la bonne lettre. Réessaie ou prends un indice.</p></div>'
+      : '<span class="pastille">?</span><div><b>À toi de jouer</b><p>Repère ton poney sur la carrière, puis touche la lettre.</p></div>';
+  cmd.innerHTML =
+    '<button type="button" class="btn" data-action="rejouer" aria-label="Rejouer la série">' + I.rejouer + '<span class="lib">Rejouer</span></button>' +
+    '<button type="button" class="btn btn-principal" data-action="question-suivante"' + (bien ? '' : ' disabled') + '>Question suivante' + I.fleche + '</button>';
+}
+
+function repondre(l) {
+  if (Q.i >= QUESTIONS.length || Q.statut === 'bien') return;
+  const q = QUESTIONS[Q.i];
+  marquerJour();
+  if (l === q.rep) {
+    Q.premier = Q.essais === 0 && !Q.indice;
+    D.quiz[q.fig.n] = { ok: Q.premier, le: jourISO(new Date()) };
+    if (Q.premier) D.etoiles += 1;
+    Q.statut = 'bien';
+    sauver();
+    majEtoiles();
+  } else {
+    Q.essais += 1; Q.statut = 'pasbien'; Q.choix = l;
+  }
+  dessinerQuiz();
+}
+function questionSuivante() {
+  Q.i += 1;
+  D.suiteQuiz = Q.i >= QUESTIONS.length ? 0 : Q.i;
+  sauver();
+  Q.statut = 'attente'; Q.choix = null; Q.indice = false; Q.essais = 0;
+  dessinerQuiz();
+}
+function rejouer() {
+  Q.i = 0; D.suiteQuiz = 0; sauver();
+  Q.statut = 'attente'; Q.choix = null; Q.indice = false; Q.essais = 0;
+  dessinerQuiz();
+}
+
+// appli/js/fiches.js
+// ———————————————— Écran Fiches
+function fiches(arg) {
+  const n = Number(arg);
+  if (n >= 1 && n <= NB_NOTEES) FN = n;
+  const f = FIGS.find((x) => x.n === FN);
+  const prec = FN > 1 ? FN - 1 : null, suiv = FN < NB_NOTEES ? FN + 1 : null;
+  const puces = f.allures.map((c) => '<span class="puce-allure" data-f="' + famille(c) + '">' + ALLURES[c] + '</span>').join('') +
+    (f.note ? '' : '<span>' + mainTexte(f) + '</span>') + '<span>Coef. ' + (f.coef || 1) + '</span>';
+  const r = D.ressentis[FN] || null;
+  app.innerHTML =
+    entete('Figure ' + FN, 'sur ' + NB_NOTEES + ' · ' + P.titre, true) + modes('fiches') +
+    '<main class="fiche">' +
+      '<nav class="fiche-nav" aria-label="Figures">' +
+        '<a href="#fiches/' + (prec || 1) + '"' + (prec ? '' : ' aria-disabled="true" tabindex="-1"') + '>‹ Figure ' + (prec || '') + '</a>' +
+        '<span>' + FN + ' / ' + NB_NOTEES + '</span>' +
+        '<a href="#fiches/' + (suiv || NB_NOTEES) + '"' + (suiv ? '' : ' aria-disabled="true" tabindex="-1"') + '>Figure ' + (suiv || '') + ' ›</a>' +
+      '</nav>' +
+      '<section class="fiche-haut">' +
+        '<div class="mini" id="mini"></div>' +
+        '<div class="fiche-infos">' +
+          '<div class="fiche-lettres">' + esc(f.note ? 'Note de position' : f.lettres) + '</div>' +
+          '<div class="puces">' + puces + '</div>' +
+          '<ol class="etapes">' + f.lignes.map((ln, i) => '<li><span class="n">' + (i + 1) + '</span><span>' + (ln[0] ? '<b>' + esc(ln[0]) + '</b>' : '') + esc(ln[1]) + '</span></li>').join('') + '</ol>' +
+          (f.geo ? '<a class="btn btn-petit" href="#regarder/' + f.n + '">' + I.oeil + 'Voir en mouvement</a>' : '') +
+        '</div>' +
+      '</section>' +
+      '<section class="bloc"><h2>Ce que regarde le juge</h2><p>' + esc(f.idees) + '</p></section>' +
+      '<section class="bloc"><label class="h2" for="note-f">Mes notes</label>' +
+        '<textarea id="note-f" data-note="' + FN + '" placeholder="Écris ce qui t\'aide à t\'en souvenir…">' + esc(D.notes[FN] || '') + '</textarea>' +
+        '<div class="ressentis" role="group" aria-label="Comment tu te sens sur cette figure">' +
+          [['facile', 'Facile'], ['presque', 'Presque'], ['revoir', 'À revoir']].map((x) => '<button type="button" data-action="ressenti" data-r="' + x[0] + '" aria-pressed="' + (r === x[0]) + '">' + x[1] + '</button>').join('') +
+        '</div>' +
+        '<p class="discret">Enregistré sur cet appareil. La reprise, elle, ne change jamais.</p>' +
+      '</section>' +
+    '</main>';
+  const v = carriere({ fantome: true, centre: false, label: 'Tracé de la figure ' + FN });
+  document.getElementById('mini').appendChild(v.svg);
+  v.actives(f.set);
+  if (f.geo) {
+    v.couche('vif', morceaux(f.s0, f.s1, 'vif'));
+    v.couche('marques', T.evenements.filter((e) => e.type === 'arret' && e.s >= f.s0 - 1e-6 && e.s <= f.s1 + 1e-6).map((e) => '<circle class="m-arret" cx="' + e.x + '" cy="' + e.y + '" r="1.1"></circle>').join(''));
+    v.pion(f.s0 + 0.4);
+  } else {
+    // Note de position : on montre toutes les parties à l'allure concernée.
+    const fam = /galop/i.test(f.lignes[0][1]) ? 'galop' : 'trot';
+    v.couche('vif', T.allures.filter((a) => famille(a.code) === fam).map((a) => morceaux(a.s0, a.s1, 'plein')).join(''));
+    v.cacherPion(true);
+  }
+  ajuster = () => {};
+}
+
+// appli/js/import.js
+// ———————————————— Import d'un paquet (appli installée)
+async function importerPaquet(fichier) {
+  try {
+    const texte = await fichier.text();
+    const bloc = new DOMParser().parseFromString(texte, 'text/html').getElementById('reprise-dressage');
+    if (!bloc || !bloc.textContent.trim()) throw new Error('Ce fichier n\'est pas un paquet de reprise.');
+    const p = JSON.parse(bloc.textContent);
+    if (p.format !== 'dressage-paquet/1' || !p.id || !p.trace) throw new Error('Paquet d\'un format inconnu.');
+    if (window.crypto && crypto.subtle && p.empreinte) {
+      const contenu = Object.assign({}, p);
+      delete contenu.empreinte;
+      const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(contenu)));
+      const hex = Array.from(new Uint8Array(h)).map((x) => x.toString(16).padStart(2, '0')).join('');
+      if ('sha256:' + hex !== p.empreinte) throw new Error('Paquet modifié ou abîmé : son empreinte ne correspond pas.');
+    }
+    const deja = PAQUETS[p.id];
+    PAQUETS[p.id] = p;
+    if (!enregistrerPaquets()) throw new Error('Plus de place sur le téléphone pour enregistrer la reprise.');
+    if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+    choisirReprise(p.id);
+    annoncer((deja ? 'Reprise mise à jour : ' : 'Reprise ajoutée : ') + p.titre);
+    if (location.hash && location.hash !== '#accueil') location.hash = '#accueil'; else router();
+  } catch (e) {
+    annoncer(e && e.message ? e.message : 'Import impossible.', true);
+  }
+}
+document.getElementById('import-paquet').addEventListener('change', (e) => {
+  const f = e.target.files && e.target.files[0];
+  e.target.value = '';
+  if (f) importerPaquet(f);
+});
+
+// appli/js/reglages.js
+// ———————————————— Réglages et test hors-ligne
+const dlg = document.getElementById('reglages');
+const appareil = () => {
+  const ua = navigator.userAgent;
+  const os = /iPhone/.test(ua) ? 'iPhone' : /iPad/.test(ua) ? 'iPad' : /Android/.test(ua) ? 'Android' : /Windows/.test(ua) ? 'Windows' : /Mac OS X/.test(ua) ? 'Mac' : /Linux/.test(ua) ? 'Linux' : 'Autre';
+  const nav = /Edg\//.test(ua) ? 'Edge' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : 'Navigateur';
+  return os + ' · ' + nav;
+};
+function ouvrirReglages() {
+  document.getElementById('prenom').value = REG.prenom || '';
+  dlg.querySelectorAll('[data-action="theme"]').forEach((b) => b.setAttribute('aria-pressed', String((REG.theme || 'auto') === b.dataset.t)));
+  const proto = location.protocol;
+  const origine = proto === 'file:' ? 'un fichier local' : proto === 'content:' ? 'un fichier local (Android)' : proto === 'https:' ? 'un serveur sécurisé (https)' : proto === 'http:' ? 'un serveur (http)' : proto;
+  const sw = MODE === 'appli' && 'serviceWorker' in navigator ? (navigator.serviceWorker.controller ? 'actif' : 'pas encore (rouvre l\'appli)') : null;
+  const lignes = [
+    ['Utilisation', MODE === 'paquet' ? 'paquet (fichier autonome)' : (INSTALLEE ? 'appli installée' : 'appli dans le navigateur'), ''],
+    ['Ouvert depuis', origine, ''],
+    ['JavaScript', 'actif', 'ok'],
+    ['Stockage local', STOCKAGE_OK ? 'OK · ' + OUV + ' ouverture' + (OUV > 1 ? 's mémorisées' : '') : 'indisponible', STOCKAGE_OK ? 'ok' : 'ko'],
+    ['IndexedDB', 'test…', ''],
+    ['Réseau', navigator.onLine ? 'connecté (inutile ici)' : 'hors ligne', 'ok'],
+    ['Appareil', appareil(), ''],
+  ];
+  if (sw) lignes.splice(4, 0, ['Mise en cache', sw, navigator.serviceWorker.controller ? 'ok' : '']);
+  if (MODE === 'appli') lignes.splice(1, 0, ['Reprises', String(Object.keys(PAQUETS).length), '']);
+  document.getElementById('diag').innerHTML = lignes.map((l) => '<dt>' + l[0] + '</dt><dd class="' + l[2] + '"' + (l[0] === 'IndexedDB' ? ' id="diag-idb"' : '') + '>' + esc(l[1]) + '</dd>').join('');
+  try {
+    let fait = false;
+    const fin = (texte, cls) => { if (fait) return; fait = true; const e = document.getElementById('diag-idb'); if (e) { e.textContent = texte; e.className = cls; } };
+    const req = indexedDB.open('dressage-test', 1);
+    req.onsuccess = () => { req.result.close(); fin('OK', 'ok'); };
+    req.onerror = () => fin('indisponible', 'ko');
+    setTimeout(() => fin('pas de réponse', 'ko'), 2000);
+  } catch (e) {
+    const el = document.getElementById('diag-idb'); if (el) { el.textContent = 'indisponible'; el.className = 'ko'; }
+  }
+  document.getElementById('bloc-donnees').hidden = !P;
+  document.getElementById('bloc-reprise').hidden = !P;
+  document.getElementById('btn-retirer').hidden = MODE !== 'appli';
+  if (P) {
+    document.getElementById('infos-reprise').innerHTML = [
+      ['Reprise', P.federation + ' · ' + P.titre],
+      ['Protocole', 'version du ' + P.versionProtocole],
+      ['Paquet', 'version ' + P.version + ', publié le ' + P.publieLe],
+      ['Empreinte', P.empreinte.slice(0, 23) + '…'],
+    ].map((l) => '<dt>' + l[0] + '</dt><dd>' + esc(l[1]) + '</dd>').join('');
+  }
+  if (typeof dlg.showModal === 'function') dlg.showModal(); else dlg.setAttribute('open', '');
+}
+function exporter() {
+  const blob = new Blob([JSON.stringify({ format: 'dressage-notes/1', reprise: P.id, paquet: P.version, exporteLe: new Date().toISOString(), donnees: D }, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'notes-' + P.id + '.json';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+document.getElementById('import-notes').addEventListener('change', (e) => {
+  const fichier = e.target.files && e.target.files[0];
+  if (!fichier || !P) return;
+  const lecteur = new FileReader();
+  lecteur.onload = () => {
+    try {
+      const j = JSON.parse(lecteur.result);
+      if (j.reprise !== P.id) { alert('Ces notes appartiennent à une autre reprise (' + j.reprise + ').'); return; }
+      D = Object.assign(VIDE(), j.donnees || {});
+      sauver();
+      dlg.close();
+      router();
+    } catch (err) { alert('Fichier de notes illisible.'); }
+  };
+  lecteur.readAsText(fichier);
+  e.target.value = '';
+});
+document.getElementById('prenom').addEventListener('input', (e) => { REG.prenom = e.target.value.trim(); sauverReglages(); });
+dlg.addEventListener('close', () => { if (!location.hash || location.hash === '#accueil') accueil(); });
+
+// appli/js/navigation.js
+// ———————————————— Actions et navigation
+const ACTIONS = {
+  reglages: ouvrirReglages,
+  theme: (b) => { REG.theme = b.dataset.t; sauverReglages(); appliquerTheme(); dlg.querySelectorAll('[data-action="theme"]').forEach((x) => x.setAttribute('aria-pressed', String(x === b))); },
+  exporter,
+  effacer: () => { if (P && confirm('Effacer tes notes, tes étoiles et ta progression pour cette reprise, sur cet appareil ?')) { D = VIDE(); sauver(); Q.i = 0; dlg.close(); router(); } },
+  retirer: () => {
+    if (!P || !confirm('Retirer « ' + P.titre + ' » de l\'appli ? Tes notes sont gardées si tu la réimportes.')) return;
+    delete PAQUETS[P.id];
+    enregistrerPaquets();
+    const reste = Object.keys(PAQUETS);
+    if (reste.length) choisirReprise(reste[0]); else { P = null; CLE = ''; REG.courante = ''; sauverReglages(); }
+    dlg.close();
+    if (location.hash && location.hash !== '#accueil') location.hash = '#accueil'; else router();
+  },
+  'importer-paquet': () => document.getElementById('import-paquet').click(),
+  'choisir-reprise': (b) => { arreter(); choisirReprise(b.dataset.id); router(); },
+  lecture,
+  precedente: () => { const s = sAt(R.t), i = geoIndex(s + 1e-3); allerFig(s - GEO[i].s0 > 3 ? i : i - 1); },
+  suivante: () => allerFig(geoIndex(sAt(R.t) + 1e-3) + 1),
+  vitesse: (b) => { const o = [1, 2, 4]; R.vitesse = o[(o.indexOf(R.vitesse) + 1) % o.length]; b.textContent = '×' + R.vitesse; },
+  'pause-figure': (b) => { R.pauseFig = !R.pauseFig; b.setAttribute('aria-pressed', String(R.pauseFig)); },
+  aller: (b) => allerFig(GEO.findIndex((f) => f.n === Number(b.dataset.n))),
+  lettre: (b) => repondre(b.dataset.l),
+  indice: () => { Q.indice = true; dessinerQuiz(); },
+  'question-suivante': questionSuivante,
+  rejouer,
+  ressenti: (b) => {
+    const r = b.dataset.r;
+    D.ressentis[FN] = D.ressentis[FN] === r ? null : r;
+    sauver();
+    b.parentNode.querySelectorAll('button').forEach((x) => x.setAttribute('aria-pressed', String(D.ressentis[FN] === x.dataset.r)));
+  },
+};
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-action]');
+  if (!b || b.disabled) return;
+  const f = ACTIONS[b.dataset.action];
+  if (f) { e.preventDefault(); f(b); }
+});
+app.addEventListener('input', (e) => {
+  const el = e.target;
+  if (el.dataset && el.dataset.note) {
+    const n = el.dataset.note;
+    if (el.value.trim()) D.notes[n] = el.value; else delete D.notes[n];
+    sauverBientot();
+  }
+});
+
+function router() {
+  arreter();
+  const parts = (location.hash.slice(1) || 'accueil').split('/');
+  const ecrans = { accueil, regarder, deviner, fiches };
+  const ecran = P ? (ecrans[parts[0]] || accueil) : accueil;
+  ecran(parts[1]);
+}
+window.addEventListener('hashchange', router);
+
+// ———————————————— Démarrage
+const ids = Object.keys(PAQUETS);
+if (ids.length) choisirReprise(PAQUETS[REG.courante] ? REG.courante : ids[0]);
+router();
+if (MODE === 'appli' && 'serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+  navigator.serviceWorker.register('./sw.js').catch(() => { /* hors-ligne indisponible, l'appli marche quand même */ });
+}
+
 })();
 </script>
 </body>

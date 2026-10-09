@@ -2,7 +2,7 @@
 <html lang="fr" data-theme="auto">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="color-scheme" content="dark light">
 <meta name="format-detection" content="telephone=no">
 <link rel="manifest" href="manifest.webmanifest">
@@ -57,6 +57,11 @@
   --pion-coeur: #F59E0B;
   --police: 'Barlow', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --condense: 'Barlow Condensed', 'Arial Narrow', 'Roboto Condensed', sans-serif;
+  /* Zones protégées (encoche, Dynamic Island, barre d'accueil, côtés en paysage) */
+  --sa-h: env(safe-area-inset-top, 0px);
+  --sa-d: env(safe-area-inset-right, 0px);
+  --sa-b: env(safe-area-inset-bottom, 0px);
+  --sa-g: env(safe-area-inset-left, 0px);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="clair"]) {
@@ -85,15 +90,28 @@
 
 /* ———————————————— Base */
 *, *::before, *::after { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; }
+/* Comportement « appli » : ni zoom, ni défilement de la page, ni débordement latéral, ni rebond. */
+html, body { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none; }
+html { touch-action: pan-x pan-y; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 body {
   background: var(--fond);
   color: var(--texte);
   font-family: var(--police);
   font-size: 15px;
   line-height: 1.35;
-  -webkit-text-size-adjust: 100%;
   -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+input, textarea { -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
+.chemin, .fiche, .accueil, .regarder .bas, dialog { overscroll-behavior: contain; }
+@media (hover: none) and (pointer: coarse) {
+  * { scrollbar-width: none; }
+  *::-webkit-scrollbar { display: none; }
+}
+@media (hover: hover) and (pointer: fine) {
+  * { scrollbar-width: thin; scrollbar-color: var(--bord-fort) transparent; }
 }
 button, input, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
@@ -105,15 +123,27 @@ h1, h2, h3, p { margin: 0; }
 .sans-js { max-width: 560px; margin: 48px auto; padding: 0 20px; display: flex; flex-direction: column; gap: 12px; font-size: 17px; }
 .sans-js h1 { font-family: var(--condense); font-size: 30px; text-transform: uppercase; }
 .sans-js a { color: var(--accent-texte); font-weight: 700; overflow-wrap: anywhere; }
-.erreur { position: fixed; left: 12px; right: 12px; bottom: 12px; z-index: 50; padding: 10px 14px; border-radius: 10px; background: #F43F5E; color: #FFFFFF; font-weight: 600; }
-.toast { position: fixed; left: 50%; bottom: max(18px, env(safe-area-inset-bottom)); z-index: 40; transform: translateX(-50%); max-width: calc(100vw - 32px); padding: 10px 16px; border-radius: 12px; background: var(--texte); color: var(--fond); font-weight: 700; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25); }
+.erreur { position: fixed; left: calc(12px + var(--sa-g)); right: calc(12px + var(--sa-d)); bottom: calc(12px + var(--sa-b)); z-index: 50; padding: 10px 14px; border-radius: 10px; background: #F43F5E; color: #FFFFFF; font-weight: 600; }
+.toast { position: fixed; left: 50%; bottom: calc(16px + var(--sa-b)); z-index: 40; transform: translateX(-50%); max-width: calc(100vw - 32px - var(--sa-g) - var(--sa-d)); padding: 10px 16px; border-radius: 12px; background: var(--texte); color: var(--fond); font-weight: 700; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25); }
 .toast.ko { background: var(--arret); color: #FFFFFF; }
 
+/* L'appli occupe exactement l'écran, marges de sécurité comprises : rien sous l'île, l'encoche ou la barre d'accueil. */
 #app {
+  width: 100%;
   height: 100vh; height: 100dvh;
   max-width: 1600px; margin: 0 auto;
+  overflow: hidden;
   display: flex; flex-direction: column; gap: 10px;
-  padding: max(10px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
+  padding: max(10px, var(--sa-h)) max(14px, var(--sa-d)) max(10px, var(--sa-b)) max(14px, var(--sa-g));
+}
+
+/* Téléphone tenu en paysage : on demande de le remettre droit plutôt que d'écraser l'appli. */
+.portrait { display: none; }
+@media (orientation: landscape) and (max-height: 500px) and (pointer: coarse) {
+  .portrait { position: fixed; inset: 0; z-index: 70; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px calc(24px + var(--sa-d)) calc(24px + var(--sa-b)) calc(24px + var(--sa-g)); background: var(--fond); color: var(--texte); text-align: center; }
+  .portrait svg { width: 56px; height: 56px; color: var(--accent-texte); }
+  .portrait p { font: 800 26px/1.1 var(--condense); letter-spacing: 0.02em; text-transform: uppercase; }
+  .portrait span { font-size: 14px; font-weight: 600; color: var(--muet); }
 }
 main { flex: 1; min-height: 0; }
 
@@ -278,7 +308,7 @@ textarea { width: 100%; min-height: 96px; resize: vertical; padding: 10px 12px; 
 .semaine-titre span { font-size: 13px; font-weight: 700; color: var(--accent-texte); }
 .semaine ol { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
 .semaine li { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 12px; font-weight: 700; color: var(--muet); }
-.jour { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 10px; background: var(--surface-2); border: 1.5px solid var(--bord); color: var(--sur-accent); }
+.jour { width: 100%; max-width: 36px; aspect-ratio: 1 / 1; display: grid; place-items: center; border-radius: 10px; background: var(--surface-2); border: 1.5px solid var(--bord); color: var(--sur-accent); }
 .jour.fait { background: var(--accent); border-color: var(--accent); }
 .jour.auj { border-color: var(--texte); }
 .liste-reprises { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
@@ -295,7 +325,7 @@ textarea { width: 100%; min-height: 96px; resize: vertical; padding: 10px 12px; 
 .pied button { border: 0; background: none; padding: 4px; color: var(--accent-texte); font-weight: 700; text-decoration: underline; }
 
 /* ———————————————— Réglages */
-dialog { width: min(460px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); padding: 0; border: 1.5px solid var(--bord); border-radius: 16px; background: var(--surface); color: var(--texte); }
+dialog { position: fixed; inset: var(--sa-h) var(--sa-d) var(--sa-b) var(--sa-g); margin: auto; width: min(460px, calc(100vw - 24px - var(--sa-g) - var(--sa-d))); max-height: calc(100vh - 24px - var(--sa-h) - var(--sa-b)); max-height: calc(100dvh - 24px - var(--sa-h) - var(--sa-b)); overflow-y: auto; padding: 0; border: 1.5px solid var(--bord); border-radius: 16px; background: var(--surface); color: var(--texte); }
 dialog::backdrop { background: rgba(5, 10, 20, 0.6); }
 .dlg { display: flex; flex-direction: column; gap: 12px; padding: 16px; }
 .dlg-tete { display: flex; align-items: center; justify-content: space-between; }
@@ -315,6 +345,15 @@ dialog::backdrop { background: rgba(5, 10, 20, 0.6); }
 .ligne-btn label { position: relative; overflow: hidden; }
 .ligne-btn input[type="file"] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 .danger { align-self: flex-start; border: 0; background: none; padding: 4px 0; color: var(--arret); font-weight: 700; text-decoration: underline; }
+
+/* ———————————————— Très petits écrans (320 px) */
+@media (max-width: 359px) {
+  .commandes { gap: 6px; }
+  .rond { width: 44px; height: 44px; }
+  .lecture { width: 56px; height: 56px; }
+  .commandes-quiz .lib { display: none; }
+  .barre h1 { font-size: 21px; }
+}
 
 /* ———————————————— Grand écran (PC) */
 @media (min-width: 900px) {
@@ -349,6 +388,11 @@ dialog::backdrop { background: rgba(5, 10, 20, 0.6); }
   <p>Sur ordinateur ou Android, ouvre-le avec un navigateur (Chrome, Edge, Firefox, Safari sur Mac).</p>
 </div>
 <div id="app" hidden></div>
+<div class="portrait">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7.5" y="2.5" width="9" height="16" rx="2"></rect><path d="M11 15.5h2"></path><path d="M3.5 13.5a8.5 8.5 0 0 0 7 7.5"></path><path d="M8.5 20.2l2 .8-.6 2"></path></svg>
+  <p>Tourne ton téléphone</p>
+  <span>Ma reprise s'utilise en mode portrait.</span>
+</div>
 <div id="erreur" class="erreur" role="alert" hidden></div>
 <div id="toast" class="toast" role="status" hidden></div>
 <input type="file" id="import-paquet" accept=".html,.htm,text/html" hidden>
@@ -397,6 +441,10 @@ dialog::backdrop { background: rgba(5, 10, 20, 0.6); }
   document.getElementById('sans-js').remove();
   const app = document.getElementById('app');
   app.hidden = false;
+
+  // Pas de zoom au pincement sur iPhone (en plus du viewport et de touch-action, que Safari n'applique pas toujours).
+  ['gesturestart', 'gesturechange', 'gestureend'].forEach((t) => document.addEventListener(t, (e) => e.preventDefault(), { passive: false }));
+  document.addEventListener('touchmove', (e) => { if (e.scale !== undefined && e.scale !== 1) e.preventDefault(); }, { passive: false });
 
   // ———————————————— 1. Stockage sur l'appareil (jamais dans le paquet)
   const lire = (cle, def) => { try { const v = localStorage.getItem(cle); return v == null ? def : JSON.parse(v); } catch (e) { return def; } };
@@ -958,7 +1006,7 @@ dialog::backdrop { background: rgba(5, 10, 20, 0.6); }
         ? '<span class="pastille">!</span><div><b>Pas tout à fait…</b><p>' + Q.choix + ' n\'est pas la bonne lettre. Réessaie ou prends un indice.</p></div>'
         : '<span class="pastille">?</span><div><b>À toi de jouer</b><p>Repère ton poney sur la carrière, puis touche la lettre.</p></div>';
     cmd.innerHTML =
-      '<button type="button" class="btn" data-action="rejouer">' + I.rejouer + 'Rejouer</button>' +
+      '<button type="button" class="btn" data-action="rejouer" aria-label="Rejouer la série">' + I.rejouer + '<span class="lib">Rejouer</span></button>' +
       '<button type="button" class="btn btn-principal" data-action="question-suivante"' + (bien ? '' : ' disabled') + '>Question suivante' + I.fleche + '</button>';
   }
 

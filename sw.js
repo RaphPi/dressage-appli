@@ -1,6 +1,6 @@
 // Service worker de « Ma reprise » : garde l'appli en cache pour qu'elle marche sans réseau.
 // Fichier généré par outils/construire.js : la version change à chaque modification de l'appli.
-const CACHE = 'ma-reprise-0d8ce26145a0';
+const CACHE = 'ma-reprise-ddddf9c13bcf';
 const FICHIERS = ['./', './index.html', './manifest.webmanifest', './icone-180.png', './icone-192.png', './icone-512.png'];
 
 self.addEventListener('install', (e) => {

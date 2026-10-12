@@ -384,9 +384,10 @@ dialog::backdrop { background: rgba(5, 10, 20, 0.6); }
 .ligne-btn input[type="file"] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 .danger { align-self: flex-start; border: 0; background: none; padding: 4px 0; color: var(--arret); font-weight: 700; text-decoration: underline; }
 
-/* ———————————————— Partager : une feuille qui monte du bas de l'écran.
-   La marge de la barre d'accueil est celle de la feuille elle-même, pas de son contenu : rien n'est dessous. */
-#partage { inset: auto 0 0 0; margin: 0 auto; width: min(520px, 100vw); max-height: calc(100vh - var(--sa-h) - 8px); max-height: calc(100dvh - var(--sa-h) - 8px); padding: 0 0 var(--sa-b); border-width: 1.5px 1.5px 0; border-radius: 22px 22px 0 0; background: var(--fond); }
+/* ———————————————— Partager : une feuille qui monte du bas de l'écran, sur toute la largeur (sans la limite de largeur que
+   les navigateurs donnent aux fenêtres modales). La marge de la barre d'accueil est celle de la feuille elle-même,
+   pas de son contenu : rien n'est dessous. */
+#partage { inset: auto 0 0 0; margin: 0 auto; width: min(520px, 100vw); max-width: none; max-height: calc(100vh - var(--sa-h) - 8px); max-height: calc(100dvh - var(--sa-h) - 8px); padding: 0 0 var(--sa-b); border-width: 1.5px 1.5px 0; border-radius: 22px 22px 0 0; background: var(--fond); }
 .feuille { display: flex; flex-direction: column; gap: 12px; padding: 8px 16px 14px; }
 .feuille .poignee { align-self: center; width: 40px; height: 5px; border-radius: 5px; background: var(--bord-fort); }
 .feuille h2 { font: 800 24px var(--condense); letter-spacing: 0.03em; text-transform: uppercase; }
@@ -396,15 +397,42 @@ dialog::backdrop { background: rgba(5, 10, 20, 0.6); }
 .choix b { font: 800 17px/1.1 var(--condense); letter-spacing: 0.02em; text-transform: uppercase; }
 .choix span { font-size: 12px; font-weight: 600; line-height: 1.25; color: var(--muet); }
 .segments.deux { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.apercu { margin: 0; display: grid; place-items: center; }
-.apercu img, .apercu .attente { height: min(320px, 36vh); height: min(320px, 36dvh); aspect-ratio: 9 / 16; border-radius: 10px; border: 1px solid var(--bord); }
-.apercu .attente { display: grid; place-items: center; padding: 10px; background: var(--surface); font-size: 12.5px; font-weight: 600; text-align: center; color: var(--muet); }
+/* Les formats : vidéo story, vidéo écran large, image ; un petit cadre dessine la forme de chacun. */
+.choix.formats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.choix.formats button { min-height: 0; justify-content: flex-start; gap: 2px; }
+.choix.formats b { font-size: 15px; line-height: 1.05; }
+.choix.formats span { font-size: 11.5px; line-height: 1.2; }
+.choix i { display: block; margin-bottom: 3px; border: 2px solid currentColor; border-radius: 3px; opacity: 0.85; }
+.choix .cadre-story { width: 13px; height: 21px; }
+.choix .cadre-large { width: 24px; height: 14px; margin-top: 7px; }
+.choix .cadre-image { width: 17px; height: 17px; margin-top: 4px; }
+.reglages-partage { display: grid; gap: 8px; }
+.en-video .reglages-partage { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.case { display: flex; align-items: center; gap: 10px; min-height: 30px; font-size: 14px; font-weight: 600; color: var(--texte-2); }
+.case input { flex: none; width: 20px; height: 20px; margin: 0; accent-color: var(--accent); }
+/* L'aperçu prend la place qui reste : il rétrécit plutôt que de faire défiler la feuille. */
+.feuille { max-height: calc(100vh - var(--sa-h) - 10px - var(--sa-b)); max-height: calc(100dvh - var(--sa-h) - 10px - var(--sa-b)); }
+.apercu { position: relative; flex: 0 1 min(320px, 36vh); flex: 0 1 min(320px, 36dvh); min-height: 0; margin: 0; }
+.apercu.large { flex-basis: min(194px, 30vh); flex-basis: min(194px, 30dvh); }
+/* L'image (ou la vidéo) garde ses proportions dans la place de l'aperçu, centrée ; l'attente a les mêmes proportions. */
+.apercu img, .apercu video, .apercu .attente { position: absolute; inset: 0; margin: auto; max-width: 100%; max-height: 100%; border-radius: 10px; border: 1px solid var(--bord); background: var(--surface); }
+.apercu .attente { inset: 0 auto; left: 50%; transform: translateX(-50%); height: 100%; aspect-ratio: 9 / 16; }
+.apercu.large .attente { inset: auto 0; top: 50%; transform: translateY(-50%); width: 100%; height: auto; aspect-ratio: 16 / 9; }
+.apercu .attente { display: grid; place-items: center; padding: 10px; font-size: 12.5px; font-weight: 600; text-align: center; color: var(--muet); }
 .feuille .btn svg { width: 20px; height: 20px; }
-/* Très petits écrans : un aperçu plus bas, sans la phrase d'explication, pour que tout tienne sans défiler. */
+.feuille .erreur { margin: 0; font-size: 12.5px; font-weight: 700; line-height: 1.4; color: var(--accent-texte); }
+/* La création d'une vidéo : une jauge, et de quoi l'annuler. */
+.creation { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 14px; background: var(--surface); border: 1.5px solid var(--bord); }
+.creation .zone { flex: 1; display: flex; flex-direction: column; gap: 7px; }
+.creation .titre { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.jauge { height: 8px; border-radius: 8px; background: var(--bord); overflow: hidden; }
+.jauge > div { height: 100%; border-radius: 8px; background: var(--accent); }
+/* Très petits écrans : un aperçu plus bas (aucun pour une vidéo), sans la phrase d'explication, pour que tout tienne sans défiler. */
 @media (max-height: 600px) {
   .feuille { gap: 9px; }
   .feuille h2 { font-size: 21px; }
-  .apercu img, .apercu .attente { height: 27vh; height: 27dvh; }
+  .apercu { flex-basis: 27vh; flex-basis: 27dvh; }
+  .en-video .apercu { display: none; }
   .feuille .discret { display: none; }
 }
 
@@ -625,8 +653,134 @@ function genererQuestions(paquet) {
 module.exports = { genererQuestions };
 return module.exports;
 })();
+// moteur/mp4.js (partagé avec Node)
+modules["./mp4"] = (function () {
+const module = { exports: {} };
+'use strict';
+// Assemblage d'un fichier MP4 (ISO BMFF) à partir d'images vidéo déjà encodées en H.264 (format « avc » :
+// unités NAL précédées de leur longueur, configuration avcC à part), sans dépendance.
+// Partagé : utilisé dans le navigateur par l'appli (vidéos du parcours, encodées par WebCodecs) et dans Node
+// par les tests. Le plus simple qui suffise : une seule piste vidéo, pas d'images B (profil Baseline), pas de
+// son, un seul bloc de données ; l'index (moov) avant les données (mdat) pour une lecture immédiate.
+//
+//   const mp4 = assembler({ largeur, hauteur, echelle: 90000, description, echantillons: [{ donnees, duree, cle }] });
+//   description : la configuration avcC (Uint8Array) ; duree : en unités de l'échelle (3000 = 1/30 s à 90000).
+//   Si l'encodeur donne un flux « Annex B » (sans description) : avcDepuisAnnexB(images) → { description, donnees }.
+
+const octets = (n, taille) => { const t = []; for (let i = taille - 1; i >= 0; i--) t.push(Math.floor(n / 2 ** (8 * i)) & 255); return t; };
+const u32 = (n) => octets(n >>> 0, 4);
+const u16 = (n) => octets(n, 2);
+const texte = (s) => [...s].map((c) => c.charCodeAt(0));
+const longueur = (morceaux) => morceaux.reduce((n, m) => n + m.length, 0);
+
+// Une boîte : sa taille, son type, puis son contenu (tableaux d'octets ou Uint8Array).
+function boite(type, ...contenu) {
+  const taille = 8 + longueur(contenu), out = new Uint8Array(taille);
+  out.set(u32(taille), 0);
+  out.set(texte(type), 4);
+  let i = 8;
+  for (const m of contenu) { out.set(m, i); i += m.length; }
+  return out;
+}
+const pleine = (type, version, drapeaux, ...contenu) => boite(type, [version, ...octets(drapeaux, 3)], ...contenu);
+const MATRICE = [0x00010000, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000].flatMap(u32);
+
+function assembler({ largeur, hauteur, echelle = 90000, description, echantillons }) {
+  if (!echantillons.length) throw new Error('aucune image à assembler');
+  const n = echantillons.length;
+  const dureeTotale = echantillons.reduce((s, e) => s + e.duree, 0);
+  const dureeMs = Math.round(dureeTotale * 1000 / echelle);
+  // Durées regroupées par suites égales (stts), images clés (stss, numérotées à partir de 1).
+  const suites = [];
+  for (const e of echantillons) {
+    const der = suites[suites.length - 1];
+    if (der && der[1] === e.duree) der[0]++; else suites.push([1, e.duree]);
+  }
+  const cles = echantillons.map((e, i) => (e.cle ? i + 1 : 0)).filter(Boolean);
+
+  const ftyp = boite('ftyp', texte('isom'), u32(512), texte('isom'), texte('iso2'), texte('avc1'), texte('mp41'));
+  const nomCompresseur = new Array(32).fill(0);
+  const avc1 = boite('avc1',
+    [0, 0, 0, 0, 0, 0], u16(1),                        // réservé, index de référence des données
+    u16(0), u16(0), u32(0), u32(0), u32(0),            // prédéfinis et réservés
+    u16(largeur), u16(hauteur), u32(0x00480000), u32(0x00480000), u32(0), u16(1),
+    nomCompresseur, u16(0x0018), u16(0xFFFF),
+    boite('avcC', description));
+  const stbl = (decalage) => boite('stbl',
+    pleine('stsd', 0, 0, u32(1), avc1),
+    pleine('stts', 0, 0, u32(suites.length), suites.flatMap(([c, d]) => [...u32(c), ...u32(d)])),
+    pleine('stss', 0, 0, u32(cles.length), cles.flatMap(u32)),
+    pleine('stsc', 0, 0, u32(1), u32(1), u32(n), u32(1)),
+    pleine('stsz', 0, 0, u32(0), u32(n), echantillons.flatMap((e) => u32(e.donnees.length))),
+    pleine('stco', 0, 0, u32(1), u32(decalage)));
+  const moov = (decalage) => boite('moov',
+    pleine('mvhd', 0, 0, u32(0), u32(0), u32(1000), u32(dureeMs), u32(0x00010000), u16(0x0100), u16(0), u32(0), u32(0), MATRICE, new Array(24).fill(0), u32(2)),
+    boite('trak',
+      pleine('tkhd', 0, 3, u32(0), u32(0), u32(1), u32(0), u32(dureeMs), u32(0), u32(0), u16(0), u16(0), u16(0), u16(0), MATRICE, u32(largeur * 65536), u32(hauteur * 65536)),
+      boite('mdia',
+        pleine('mdhd', 0, 0, u32(0), u32(0), u32(echelle), u32(dureeTotale), u16(0x55C4), u16(0)),
+        pleine('hdlr', 0, 0, u32(0), texte('vide'), u32(0), u32(0), u32(0), texte('VideoHandler'), [0]),
+        boite('minf',
+          pleine('vmhd', 0, 1, u16(0), u16(0), u16(0), u16(0)),
+          boite('dinf', pleine('dref', 0, 0, u32(1), pleine('url ', 0, 1))),
+          stbl(decalage)))));
+  // La taille de l'index ne dépend pas de la position des données : on la mesure, puis on place les données.
+  const tailleMoov = moov(0).length;
+  const debutDonnees = ftyp.length + tailleMoov + 8;
+  const index = moov(debutDonnees);
+  const tailleDonnees = longueur(echantillons.map((e) => e.donnees));
+  const out = new Uint8Array(debutDonnees + tailleDonnees);
+  out.set(ftyp, 0);
+  out.set(index, ftyp.length);
+  out.set(u32(8 + tailleDonnees), ftyp.length + tailleMoov);
+  out.set(texte('mdat'), ftyp.length + tailleMoov + 4);
+  let i = debutDonnees;
+  for (const e of echantillons) { out.set(e.donnees, i); i += e.donnees.length; }
+  return out;
+}
+
+// ———————————————— Flux « Annex B » (unités NAL séparées par 00 00 01) : un encodeur peut le donner au lieu
+// du format avc. On en tire la configuration avcC (SPS et PPS) et des images au format avc.
+function unitesNal(flux) {
+  const out = [];
+  let debut = -1;
+  const couper = (fin) => { while (fin > debut && flux[fin - 1] === 0) fin--; if (fin > debut) out.push(flux.subarray(debut, fin)); };
+  for (let i = 0; i + 2 < flux.length; i++) {
+    if (flux[i] === 0 && flux[i + 1] === 0 && flux[i + 2] === 1) {
+      if (debut >= 0) couper(i);
+      debut = i + 3;
+      i += 2;
+    }
+  }
+  if (debut >= 0) couper(flux.length);
+  return out;
+}
+const configurationAvc = (sps, pps) => Uint8Array.from([1, sps[1], sps[2], sps[3], 0xFF, 0xE1, ...u16(sps.length), ...sps, 1, ...u16(pps.length), ...pps]);
+const enLongueurs = (nals) => {
+  const out = new Uint8Array(longueur(nals) + 4 * nals.length);
+  let i = 0;
+  for (const n of nals) { out.set(u32(n.length), i); out.set(n, i + 4); i += 4 + n.length; }
+  return out;
+};
+// acces : une image par élément (Uint8Array en Annex B). Les SPS, PPS et délimiteurs (types 7, 8, 9) sortent des images.
+function avcDepuisAnnexB(acces) {
+  let sps = null, pps = null;
+  const donnees = acces.map((a) => enLongueurs(unitesNal(a).filter((nal) => {
+    const type = nal[0] & 0x1F;
+    if (type === 7) sps = sps || nal;
+    if (type === 8) pps = pps || nal;
+    return type !== 7 && type !== 8 && type !== 9;
+  })));
+  if (!sps || !pps) throw new Error('flux H.264 sans SPS ni PPS');
+  return { description: configurationAvc(sps, pps), donnees };
+}
+
+module.exports = { assembler, unitesNal, avcDepuisAnnexB };
+return module.exports;
+})();
 const Lecture = require('./lecture');
 const Questions = require('./questions');
+const Mp4 = require('./mp4');
 // appli/js/demarrage.js
 // ———————————————— Erreurs visibles (utile pour tester sur un appareil)
 const bandeau = document.getElementById('erreur');
@@ -1151,7 +1305,7 @@ function allerFig(i) {
 }
 
 // appli/js/dessin.js
-// ———————————————— Dessin de la carrière sur un canvas : images à partager (et vidéos, plus tard)
+// ———————————————— Dessin de la carrière sur un canvas : images et vidéos à partager
 // Même rendu que le SVG de l'appli (styles/carriere.css) : couleurs du thème, tracé par allure, arrêts,
 // plaques. La géométrie se dessine en mètres (contexte mis à l'échelle) ; le texte, en pixels, reste net.
 
@@ -1216,50 +1370,76 @@ function tracerMorceaux(ctx, c, a, b, mode) {
 }
 
 // La carrière, coin haut-gauche de ses marges en (x, y), à l'échelle k (pixels par mètre).
-// o : { morceaux: [[a, b, mode], …], marquesJusqua, actives: { lettre: true }, fantome, pion: abscisse }
+// o : { morceaux: [[a, b, mode], …], marquesJusqua, actives: { lettre: true }, fantome, pion: abscisse,
+//       couchee : C à droite et A à gauche (vidéo écran large), les lettres restant droites ;
+//       parties : les couches à dessiner, du dessous au dessus — 'sol' (carrière, lettres du milieu), 'traces'
+//       (fantôme, morceaux), 'reperes' (marques, plaques et leurs lettres), 'pion' ; toutes par défaut }.
+// Les vidéos dessinent les couches fixes une fois par figure, et seulement le reste à chaque image.
 function dessinerCarriere(ctx, x, y, k, c, o) {
-  const ox = x + 5 * k, oy = y + 5 * k;
-  ctx.save();
-  ctx.setTransform(k, 0, 0, k, ox, oy);
-  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-  rondRect(ctx, -0.45, -0.45, T.W + 0.9, T.L + 0.9, 0.8);
-  if (c['lice-ext'] !== 'transparent') { ctx.strokeStyle = c['lice-ext']; ctx.lineWidth = 0.25; ctx.stroke(); }
-  rondRect(ctx, 0, 0, T.W, T.L, 0.5);
-  ctx.fillStyle = c.sol; ctx.fill();
-  ctx.strokeStyle = c.lice; ctx.lineWidth = 0.35; ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(T.W / 2, 0.7); ctx.lineTo(T.W / 2, T.L - 0.7);
-  ctx.strokeStyle = c.milieu; ctx.lineWidth = 0.2; ctx.setLineDash([1, 1.2]); ctx.stroke(); ctx.setLineDash([]);
-  CENTRE.forEach((l) => { cercle(ctx, l.x, l.y, 0.3); ctx.fillStyle = c.milieu; ctx.fill(); });
-  if (o.fantome) {
-    T.allures.forEach((a) => { ctx.strokeStyle = c.fantome; ctx.lineWidth = 0.3; ctx.setLineDash([0.8, 1]); ctx.stroke(new Path2D(trace(a.s0, a.s1))); });
-    ctx.setLineDash([]);
+  const parties = o.parties || ['sol', 'traces', 'reperes', 'pion'];
+  const couchee = !!o.couchee;
+  const enMetres = (dessin) => {
+    ctx.save();
+    if (couchee) ctx.setTransform(0, k, -k, 0, x + (T.L + 5) * k, y + 5 * k);
+    else ctx.setTransform(k, 0, 0, k, x + 5 * k, y + 5 * k);
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    dessin();
+    ctx.restore();
+  };
+  // Les lettres, en pixels (un texte minuscule agrandi par le contexte serait flou) ; décalage (dx, dy) à l'écran, en mètres.
+  const lettre = (t, mx, my, dx, dy) => {
+    const p = couchee ? [x + (T.L + 5 - my) * k, y + (mx + 5) * k] : [x + (mx + 5) * k, y + (my + 5) * k];
+    ctx.fillText(t, p[0] + dx * k, p[1] + dy * k);
+  };
+  if (parties.includes('sol')) {
+    enMetres(() => {
+      rondRect(ctx, -0.45, -0.45, T.W + 0.9, T.L + 0.9, 0.8);
+      if (c['lice-ext'] !== 'transparent') { ctx.strokeStyle = c['lice-ext']; ctx.lineWidth = 0.25; ctx.stroke(); }
+      rondRect(ctx, 0, 0, T.W, T.L, 0.5);
+      ctx.fillStyle = c.sol; ctx.fill();
+      ctx.strokeStyle = c.lice; ctx.lineWidth = 0.35; ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(T.W / 2, 0.7); ctx.lineTo(T.W / 2, T.L - 0.7);
+      ctx.strokeStyle = c.milieu; ctx.lineWidth = 0.2; ctx.setLineDash([1, 1.2]); ctx.stroke(); ctx.setLineDash([]);
+      CENTRE.forEach((l) => { cercle(ctx, l.x, l.y, 0.3); ctx.fillStyle = c.milieu; ctx.fill(); });
+    });
+    ctx.textBaseline = 'alphabetic'; ctx.font = POLICE(700, 1.6 * k, true); ctx.fillStyle = c.muet; ctx.textAlign = 'left';
+    CENTRE.forEach((l) => (couchee ? lettre(l.n, l.x, l.y, 0.5, -0.6) : lettre(l.n, l.x, l.y, 0.7, 0.55)));
   }
-  (o.morceaux || []).forEach(([a, b, mode]) => tracerMorceaux(ctx, c, a, b, mode));
-  T.evenements.filter((e) => e.s <= (o.marquesJusqua == null ? -1 : o.marquesJusqua) + 1e-6 && !(e.type === 'transition' && ARRETS[e.s])).forEach((e) => {
-    if (e.type === 'arret') { cercle(ctx, e.x, e.y, 0.95); ctx.fillStyle = c.arret; ctx.fill(); ctx.strokeStyle = c.surface; ctx.lineWidth = 0.3; ctx.stroke(); }
-    else { cercle(ctx, e.x, e.y, 0.6); ctx.fillStyle = c.surface; ctx.fill(); ctx.strokeStyle = c[(TRAITS[e.code] || TRAITS.approche).c]; ctx.lineWidth = 0.3; ctx.stroke(); }
-  });
-  PLAQUES.forEach((p) => {
-    rondRect(ctx, p.x - 1.8, p.y - 1.8, 3.6, 3.6, 0.5);
-    ctx.fillStyle = o.actives && o.actives[p.n] ? c.accent : c.plaque; ctx.fill();
-    ctx.strokeStyle = c['plaque-bord']; ctx.lineWidth = 0.2; ctx.stroke();
-  });
-  if (o.pion != null) {
-    const p = ptAt(o.pion), a = ptAt(Math.max(0, o.pion - 0.4)), b = ptAt(Math.min(T.total, o.pion + 0.4));
-    ctx.translate(p[0], p[1]);
-    ctx.rotate(Math.atan2(b[1] - a[1], b[0] - a[0]));
-    cercle(ctx, 0, 0, 2.4); ctx.globalAlpha = 0.22; ctx.fillStyle = c['pion-coeur']; ctx.fill(); ctx.globalAlpha = 1;
-    const forme = new Path2D('M2.15 0L0.42 -1.24A1.3 1.3 0 1 0 0.42 1.24Z');
-    ctx.fillStyle = c.pion; ctx.fill(forme); ctx.strokeStyle = c['pion-bord']; ctx.lineWidth = 0.3; ctx.stroke(forme);
-    cercle(ctx, -0.15, 0, 0.42); ctx.fillStyle = c['pion-coeur']; ctx.fill();
+  if (parties.includes('traces')) {
+    enMetres(() => {
+      if (o.fantome) {
+        T.allures.forEach((a) => { ctx.strokeStyle = c.fantome; ctx.lineWidth = 0.3; ctx.setLineDash([0.8, 1]); ctx.stroke(new Path2D(trace(a.s0, a.s1))); });
+        ctx.setLineDash([]);
+      }
+      (o.morceaux || []).forEach(([a, b, mode]) => tracerMorceaux(ctx, c, a, b, mode));
+    });
   }
-  ctx.restore();
-  // Les lettres, en pixels (un texte minuscule agrandi par le contexte serait flou).
-  ctx.textBaseline = 'alphabetic';
-  ctx.font = POLICE(700, 1.6 * k, true); ctx.fillStyle = c.muet; ctx.textAlign = 'left';
-  CENTRE.forEach((l) => ctx.fillText(l.n, ox + (l.x + 0.7) * k, oy + (l.y + 0.55) * k));
-  ctx.font = POLICE(800, 2.7 * k, true); ctx.fillStyle = c['plaque-texte']; ctx.textAlign = 'center';
-  PLAQUES.forEach((p) => ctx.fillText(p.n, ox + p.x * k, oy + (p.y + 0.95) * k));
+  if (parties.includes('reperes')) {
+    enMetres(() => {
+      T.evenements.filter((e) => e.s <= (o.marquesJusqua == null ? -1 : o.marquesJusqua) + 1e-6 && !(e.type === 'transition' && ARRETS[e.s])).forEach((e) => {
+        if (e.type === 'arret') { cercle(ctx, e.x, e.y, 0.95); ctx.fillStyle = c.arret; ctx.fill(); ctx.strokeStyle = c.surface; ctx.lineWidth = 0.3; ctx.stroke(); }
+        else { cercle(ctx, e.x, e.y, 0.6); ctx.fillStyle = c.surface; ctx.fill(); ctx.strokeStyle = c[(TRAITS[e.code] || TRAITS.approche).c]; ctx.lineWidth = 0.3; ctx.stroke(); }
+      });
+      PLAQUES.forEach((p) => {
+        rondRect(ctx, p.x - 1.8, p.y - 1.8, 3.6, 3.6, 0.5);
+        ctx.fillStyle = o.actives && o.actives[p.n] ? c.accent : c.plaque; ctx.fill();
+        ctx.strokeStyle = c['plaque-bord']; ctx.lineWidth = 0.2; ctx.stroke();
+      });
+    });
+    ctx.textBaseline = 'alphabetic'; ctx.font = POLICE(800, 2.7 * k, true); ctx.fillStyle = c['plaque-texte']; ctx.textAlign = 'center';
+    PLAQUES.forEach((p) => lettre(p.n, p.x, p.y, 0, 0.95));
+  }
+  if (parties.includes('pion') && o.pion != null) {
+    enMetres(() => {
+      const p = ptAt(o.pion), a = ptAt(Math.max(0, o.pion - 0.4)), b = ptAt(Math.min(T.total, o.pion + 0.4));
+      ctx.translate(p[0], p[1]);
+      ctx.rotate(Math.atan2(b[1] - a[1], b[0] - a[0]));
+      cercle(ctx, 0, 0, 2.4); ctx.globalAlpha = 0.22; ctx.fillStyle = c['pion-coeur']; ctx.fill(); ctx.globalAlpha = 1;
+      const forme = new Path2D('M2.15 0L0.42 -1.24A1.3 1.3 0 1 0 0.42 1.24Z');
+      ctx.fillStyle = c.pion; ctx.fill(forme); ctx.strokeStyle = c['pion-bord']; ctx.lineWidth = 0.3; ctx.stroke(forme);
+      cercle(ctx, -0.15, 0, 0.42); ctx.fillStyle = c['pion-coeur']; ctx.fill();
+    });
+  }
 }
 
 // ———————————————— Texte : une ligne coupée à la largeur, ou un paragraphe fait de morceaux de styles différents
@@ -1377,16 +1557,355 @@ async function imageAPartager(quoi, f, theme) {
   const ctx = can.getContext('2d'), c = couleursDu(theme);
   fondImage(ctx, c);
   if (quoi === 'figure') dessinerCarte(ctx, c, f); else dessinerFiche(ctx, c);
-  return new Promise((ok, ko) => can.toBlob((b) => (b ? ok(b) : ko(new Error('image impossible'))), 'image/png'));
+  return enFichier(can, 'image/png');
+}
+// Le contenu d'un canvas en fichier, puis le canvas vidé : Safari sur iPhone libère mal la mémoire des canvas,
+// et refuse d'en créer de nouveaux au-delà d'un plafond.
+const libererCanvas = (...canvas) => canvas.forEach((k) => { k.width = 0; k.height = 0; });
+function enFichier(can, type, qualite) {
+  return new Promise((ok, ko) => can.toBlob((b) => { libererCanvas(can); if (b) ok(b); else ko(new Error('image impossible')); }, type, qualite));
+}
+
+// appli/js/video.js
+// ———————————————— Vidéos du parcours : story 9:16 (720 × 1280) et écran large 16:9 (1280 × 720)
+// Chaque image est dessinée sur un canvas (dessin.js), encodée en H.264 par l'appareil (WebCodecs), puis le tout
+// est rangé dans un MP4 (moteur/mp4.js). Rien n'est filmé, tout est calculé : bien plus rapide que le temps réel.
+// Sans WebCodecs (iOS avant 16.4), pas de vidéo : l'image, elle, se partage toujours.
+const VIDEO = { story: { l: 720, h: 1280 }, large: { l: 1280, h: 720 }, ips: 30, debit: 1200000, tenue: 1.5 };
+// Baseline contrainte d'abord : pas d'images B, donc un MP4 simple (images dans l'ordre). Sinon Main, puis High.
+const CODECS = ['avc1.42E028', 'avc1.42E01F', 'avc1.4D0028', 'avc1.640028'];
+const ALLURES_VIDEO = { approche: 'Entrée', pas: 'Pas', 'pas-allonge': 'Pas allongé', 'pas-libre': 'Pas libre', trot: 'Trot', 'galop-d': 'Galop à droite', 'galop-g': 'Galop à gauche', arret: 'Arrêt' };
+const videoPossible = () => typeof VideoEncoder === 'function' && typeof VideoFrame === 'function';
+
+// Le morceau filmé : toute la reprise, puis une tenue sur « Fin de la reprise » ; ou une figure, puis une tenue
+// sur son tracé complet. Le temps de la reprise avance de vitesse / ips à chaque image.
+function planVideo(quoi, f, vitesse) {
+  const figure = quoi === 'figure' ? f : null;
+  const t0 = figure ? tAt(figure.s0) : 0, t1 = figure ? Math.max(t0, tAt(figure.s1) - 0.02) : T.duree;
+  const n = Math.max(1, Math.ceil((t1 - t0) / vitesse * VIDEO.ips)), tenue = Math.round(VIDEO.tenue * VIDEO.ips);
+  return { figure, t0, t1, vitesse, n, total: n + tenue, duree: (n + tenue) / VIDEO.ips };
+}
+const instantVideo = (pl, i) => (i < pl.n ? Math.min(pl.t1, pl.t0 + i / VIDEO.ips * pl.vitesse) : pl.t1);
+
+// Où en est la reprise à l'instant t (comme dessiner() dans regarder.js). Pour une figure seule, on y reste.
+function sceneVideo(t, figure) {
+  let s = sAt(t), gi = geoIndex(s + 1e-3);
+  if (figure) { gi = GEO.indexOf(figure); s = Math.min(Math.max(s, figure.s0), figure.s1); }
+  const fin = !figure && t >= T.duree - 0.01, cf = GEO[gi], arret = !fin && enArret(t), code = arret ? 'arret' : allureA(s);
+  return { t, s, fin, gi, cf, montre: fin ? FIGS[FIGS.length - 1] : cf, code, couleur: fin ? 'accent' : arret ? 'arret' : famille(code) };
+}
+// L'état d'une figure dans la frise, comme dans l'appli : en cours, faite (couleur de sa dernière allure), note, à venir.
+function etatFigure(f, sc) {
+  const actuel = f === sc.montre;
+  return {
+    actuel,
+    fait: !actuel && (sc.fin || (f.geo ? f.s1 <= sc.s + 1e-6 : f.s0 < sc.s - 1e-6)),
+    coul: f.allures.length ? famille(f.allures[f.allures.length - 1]) : 'approche',
+  };
+}
+const suiteVideo = (sc, long) => {
+  if (sc.fin) return 'Merci d\'avoir regardé !';
+  const f = sc.montre, ensuite = GEO[sc.gi + 1];
+  const apres = ensuite ? (ensuite.sortie ? 'ensuite la sortie' : 'ensuite ' + ensuite.n + ' · ' + ensuite.lettres + (long ? ' · ' + ensuite.court : '')) : 'fin de la reprise';
+  return long ? mainTexte(f) + ' · ' + apres : f.court + ' · ' + mainTexte(f).toLowerCase() + ' · ' + apres;
+};
+
+// La carrière au plus grand dans un cadre, centrée.
+function placerCarriere(x, y, l, h, couchee) {
+  const lc = couchee ? T.L + 10 : T.W + 10, hc = couchee ? T.W + 10 : T.L + 10, k = Math.min(l / lc, h / hc);
+  return { x: x + (l - lc * k) / 2, y: y + (h - hc * k) / 2, k, couchee };
+}
+
+// Texte de plusieurs styles coupé en lignes, au plus max lignes (la dernière finit par « … » si le texte est plus long).
+function couperEnLignes(ctx, morceaux, largeur, max) {
+  const lignes = [[]];
+  let cx = 0, coupe = false;
+  for (const m of morceaux) {
+    ctx.font = m.police;
+    for (const mot of m.t.split(/(\s+)/)) {
+      if (!mot) continue;
+      const w = ctx.measureText(mot).width;
+      if (/^\s+$/.test(mot)) { if (cx > 0) cx += w; continue; }
+      if (cx > 0 && cx + w > largeur) {
+        if (lignes.length === max) { coupe = true; break; }
+        lignes.push([]);
+        cx = 0;
+      }
+      lignes[lignes.length - 1].push({ t: mot, police: m.police, couleur: m.couleur, x: cx, w });
+      cx += w;
+    }
+    if (coupe) break;
+  }
+  if (coupe) {
+    const der = lignes[lignes.length - 1];
+    const fin = () => der[der.length - 1];
+    ctx.font = fin().police;
+    const wP = ctx.measureText('…').width;
+    while (der.length > 1 && fin().x + fin().w + wP > largeur) der.pop();
+    der.push({ t: '…', police: fin().police, couleur: fin().couleur, x: fin().x + fin().w, w: wP });
+  }
+  return lignes;
+}
+function ecrireLignes(ctx, lignes, x, y, interligne) {
+  lignes.forEach((ligne, i) => ligne.forEach((m) => inscrire(ctx, m.t, x + m.x, y + i * interligne, m.police, m.couleur)));
+}
+// Les lignes du protocole d'une figure : lettres en gras, texte, et « · » entre deux lignes.
+const morceauxLignes = (f, c, tLettres, tTexte) => f.lignes.flatMap((ln, i) => [
+  ...(ln[0] ? [{ t: ln[0] + ' ', police: POLICE(800, tLettres, true), couleur: c.texte }] : []),
+  { t: ln[1], police: POLICE(600, tTexte), couleur: c['texte-2'] },
+  ...(i < f.lignes.length - 1 ? [{ t: ' · ', police: POLICE(600, tTexte), couleur: c.muet }] : []),
+]);
+
+// La pastille de l'allure en cours : texte foncé sur la couleur de l'allure, sur deux lignes si elle est trop longue.
+function pastilleVideo(ctx, c, sc, x, haut, max, align) {
+  const police = POLICE(700, 20), texte = (sc.fin ? 'Fin' : ALLURES_VIDEO[sc.code] || '').toUpperCase();
+  ctx.font = police;
+  let lignes = [texte];
+  if (ctx.measureText(texte).width > max - 24 && texte.includes(' ')) { const i = texte.lastIndexOf(' '); lignes = [texte.slice(0, i), texte.slice(i + 1)]; }
+  const w = Math.min(max, Math.max(...lignes.map((l) => ctx.measureText(l).width)) + 24), h = lignes.length * 25 + 10;
+  const x0 = align === 'centre' ? x - w / 2 : align === 'droite' ? x - w : x;
+  rondRect(ctx, x0, haut, w, h, 12);
+  ctx.fillStyle = c[sc.couleur]; ctx.fill();
+  lignes.forEach((l, i) => inscrire(ctx, l, x0 + w / 2, haut + 27 + i * 25, police, c.fond, 'center'));
+}
+function barreVideo(ctx, c, x, y, l, h, part) {
+  rondRect(ctx, x, y, l, h, h / 2); ctx.fillStyle = c.bord; ctx.fill();
+  if (part > 0) { rondRect(ctx, x, y, Math.max(h, l * Math.min(1, part)), h, h / 2); ctx.fillStyle = c.accent; ctx.fill(); }
+}
+// Le numéro d'une figure dans un carré de la frise.
+function caseFigure(ctx, c, f, e, x, y, l, h, taille) {
+  rondRect(ctx, x + 1.5, y + 1.5, l - 3, h - 3, Math.min(10, h / 3));
+  ctx.lineWidth = 3;
+  if (e.actuel) { ctx.fillStyle = c.accent; ctx.fill(); }
+  else if (e.fait) { ctx.fillStyle = c[e.coul]; ctx.fill(); }
+  else { ctx.strokeStyle = c['bord-fort']; if (f.note) ctx.setLineDash([6, 4]); ctx.stroke(); ctx.setLineDash([]); }
+  const coul = e.actuel ? c['sur-accent'] : e.fait ? c.fond : f.note ? c.muet : c['texte-2'];
+  inscrire(ctx, f.sortie ? 'FIN' : String(f.n), x + l / 2, y + h / 2 + taille * 0.36, POLICE(800, f.sortie ? taille * 0.8 : taille, true), coul, 'center');
+}
+const sousTitreVideo = () => (P.federation + ' · protocole du ' + P.versionProtocole + ' · carrière ' + T.W + ' × ' + T.L).toUpperCase();
+const chronoVideo = (sc) => mmss(sc.t) + ' / ' + mmss(T.duree);
+
+// ———————————————— Mises en page (maquettes v4 « Video-Story » et « Video-Large », au double)
+// fixe : ce qui ne change pas pendant une figure ; mobile : ce qui change à chaque image (pastille, temps).
+const MISES_EN_PAGE = {
+  story: {
+    carriere: (texte) => placerCarriere(152, 120, 416, texte ? 910 : 1060, false),
+    fixe(ctx, c, sc, o) {
+      inscrire(ctx, tronquer(ctx, P.titre.toUpperCase(), POLICE(800, 46, true), 664), 28, 62, POLICE(800, 46, true), c.texte);
+      inscrire(ctx, tronquer(ctx, sousTitreVideo(), POLICE(700, 21), 664), 28, 94, POLICE(700, 21), c.muet);
+      // Le numéro de la figure, à gauche de la carrière ; la frise des figures, à droite.
+      inscrire(ctx, sc.fin ? 'FIN' : String(sc.montre.n), 82, 206, POLICE(800, 92, true), c['accent-texte'], 'center');
+      // (peu de figures : des cases rapprochées, centrées, plutôt qu'étalées sur toute la hauteur)
+      const n = FIGS.length, h = Math.min(34, 904 / n - 4), pas = n > 1 ? Math.min(48, (904 - h) / (n - 1)) : 0, y0 = 124 + (904 - h - pas * (n - 1)) / 2;
+      FIGS.forEach((f, i) => caseFigure(ctx, c, f, etatFigure(f, sc), 644, y0 + i * pas, 60, h, 23));
+      if (o.texte) {
+        rondRect(ctx, 24, 1048, 672, 164, 24);
+        ctx.globalAlpha = 0.88; ctx.fillStyle = c.surface; ctx.fill(); ctx.globalAlpha = 1;
+        ctx.strokeStyle = c.bord; ctx.lineWidth = 2; ctx.stroke();
+        ecrireLignes(ctx, couperEnLignes(ctx, morceauxLignes(sc.montre, c, 30, 26), 632, 2), 44, 1092, 36);
+        inscrire(ctx, tronquer(ctx, suiteVideo(sc, false), POLICE(700, 22), 632), 44, 1192, POLICE(700, 22), c.muet);
+      }
+      inscrire(ctx, 'MA REPRISE', 696, 1250, POLICE(800, 22, true), c['texte-2'], 'right');
+    },
+    mobile(ctx, c, sc) {
+      pastilleVideo(ctx, c, sc, 82, 228, 132, 'centre');
+      ctx.font = POLICE(700, 21);
+      const x0 = 24 + ctx.measureText('00:00 / 00:00').width + 16;
+      ctx.font = POLICE(800, 22, true);
+      const x1 = 696 - ctx.measureText('MA REPRISE').width - 16;
+      inscrire(ctx, chronoVideo(sc), 24, 1250, POLICE(700, 21), c.muet);
+      barreVideo(ctx, c, x0, 1238, x1 - x0, 8, sc.t / T.duree);
+      if (sc.fin) {
+        rondRect(ctx, 80, 460, 560, 166, 32);
+        ctx.globalAlpha = 0.92; ctx.fillStyle = c.surface; ctx.fill(); ctx.globalAlpha = 1;
+        ctx.strokeStyle = c.accent; ctx.lineWidth = 3; ctx.stroke();
+        inscrire(ctx, 'FIN DE LA REPRISE', 360, 544, POLICE(800, 60, true), c['accent-texte'], 'center');
+        inscrire(ctx, tronquer(ctx, P.titre + ' · ' + NB_NOTEES + ' figures · ' + mmss(T.duree), POLICE(700, 25), 500), 360, 588, POLICE(700, 25), c['texte-2'], 'center');
+      }
+    },
+  },
+  large: {
+    carriere: (texte) => placerCarriere(16, 100, 840, texte ? 360 : 580, true),
+    fixe(ctx, c, sc, o) {
+      inscrire(ctx, tronquer(ctx, P.titre.toUpperCase(), POLICE(800, 42, true), 820), 32, 54, POLICE(800, 42, true), c.texte);
+      inscrire(ctx, tronquer(ctx, sousTitreVideo(), POLICE(700, 19), 820), 32, 82, POLICE(700, 19), c.muet);
+      if (o.texte) {
+        // Numéro, lettres et libellé sur une ligne (la pastille, à droite, change à chaque image), puis le protocole.
+        const f = sc.montre, num = sc.fin ? 'FIN' : String(f.n), limite = 840 - 230;
+        ctx.font = POLICE(800, 68, true);
+        let x = 32 + ctx.measureText(num).width + 20;
+        inscrire(ctx, num, 32, 532, POLICE(800, 68, true), c['accent-texte']);
+        const lettres = tronquer(ctx, sc.fin ? 'Reprise terminée' : f.lettres || f.court, POLICE(800, 42, true), limite - x);
+        inscrire(ctx, lettres, x, 532, POLICE(800, 42, true), c.texte);
+        x += ctx.measureText(lettres).width + 20;
+        if (!sc.fin && f.lettres && limite - x > 60) inscrire(ctx, tronquer(ctx, f.court, POLICE(600, 26), limite - x), x, 532, POLICE(600, 26), c.muet);
+        ecrireLignes(ctx, couperEnLignes(ctx, morceauxLignes(f, c, 30, 26), 808, 2), 32, 578, 34);
+        inscrire(ctx, tronquer(ctx, suiteVideo(sc, true), POLICE(700, 22), 808), 32, 652, POLICE(700, 22), c.muet);
+      }
+      // À droite, les figures : une fenêtre de 8 autour de celle en cours.
+      rondRect(ctx, 884, 24, 372, 672, 28);
+      ctx.globalAlpha = 0.86; ctx.fillStyle = c.surface; ctx.fill(); ctx.globalAlpha = 1;
+      ctx.strokeStyle = c.bord; ctx.lineWidth = 2; ctx.stroke();
+      inscrire(ctx, 'LES ' + NB_NOTEES + ' FIGURES', 904, 60, POLICE(700, 19), c.muet);
+      const i0 = FIGS.indexOf(sc.montre), debut = Math.max(0, Math.min(FIGS.length - 8, i0 - 2));
+      FIGS.slice(debut, debut + 8).forEach((f, j) => {
+        const e = etatFigure(f, sc), y = 74 + j * 66;
+        if (e.actuel) { rondRect(ctx, 904, y, 332, 60, 16); ctx.fillStyle = c.accent; ctx.fill(); }
+        if (e.actuel) {
+          rondRect(ctx, 914, y + 8, 44, 44, 10); ctx.fillStyle = c['sur-accent']; ctx.fill();
+          inscrire(ctx, f.sortie ? 'FIN' : String(f.n), 936, y + 39, POLICE(800, f.sortie ? 19 : 24, true), c.accent, 'center');
+        } else caseFigure(ctx, c, f, e, 914, y + 8, 44, 44, 24);
+        const coul = e.actuel ? c['sur-accent'] : e.fait ? c.muet : c.texte;
+        inscrire(ctx, tronquer(ctx, f.note ? 'Note' : f.sortie ? 'Sortie' : f.lettres, POLICE(800, 26, true), 254), 972, y + 27, POLICE(800, 26, true), coul);
+        ctx.globalAlpha = 0.8;
+        inscrire(ctx, tronquer(ctx, f.court, POLICE(600, 20), 254), 972, y + 50, POLICE(600, 20), coul);
+        ctx.globalAlpha = 1;
+      });
+      inscrire(ctx, 'MA REPRISE', 1236, 678, POLICE(800, 20, true), c['texte-2'], 'right');
+    },
+    mobile(ctx, c, sc, o) {
+      if (o.texte) pastilleVideo(ctx, c, sc, 840, 498, 240, 'droite');
+      ctx.font = POLICE(700, 19);
+      const x0 = 904 + ctx.measureText('00:00 / 00:00').width + 12;
+      inscrire(ctx, chronoVideo(sc), 904, 644, POLICE(700, 19), c.muet);
+      barreVideo(ctx, c, x0, 634, 1236 - x0, 8, sc.t / T.duree);
+    },
+  },
+};
+
+// Le peintre d'une vidéo : peint l'image de l'instant t. Les couches fixes d'une figure sont gardées dans deux
+// calques (dessous : fond, carrière, fantôme, figures faites et textes ; dessus : marques et plaques) ;
+// à chaque image, on ne redessine que la figure en cours, le pion et ce qui bouge. peindre.liberer() rend leur mémoire.
+function peintreVideo(o, c) {
+  const D = VIDEO[o.format], mise = MISES_EN_PAGE[o.format], place = mise.carriere(o.texte);
+  const calque = () => { const k = document.createElement('canvas'); k.width = D.l; k.height = D.h; return k; };
+  const dessous = calque(), dessus = calque(), cDessous = dessous.getContext('2d'), cDessus = dessus.getContext('2d');
+  const carriere = (ctx, parties, x) => dessinerCarriere(ctx, place.x, place.y, place.k, c, Object.assign({ couchee: place.couchee, parties }, x));
+  let cle = '';
+  const peindre = (ctx, t) => {
+    const sc = sceneVideo(t, o.figure);
+    if (cle !== sc.gi + '/' + sc.fin) {
+      cle = sc.gi + '/' + sc.fin;
+      cDessous.fillStyle = c.fond; cDessous.fillRect(0, 0, D.l, D.h);
+      carriere(cDessous, ['sol', 'traces'], { fantome: true, morceaux: [[0, sc.cf.s0, 'faits']] });
+      mise.fixe(cDessous, c, sc, o);
+      cDessus.clearRect(0, 0, D.l, D.h);
+      carriere(cDessus, ['reperes'], { marquesJusqua: sc.cf.s1, actives: sc.cf.set });
+    }
+    ctx.drawImage(dessous, 0, 0);
+    carriere(ctx, ['traces'], { morceaux: sc.fin ? [[sc.cf.s0, sc.s, 'vif']] : [[sc.s, sc.cf.s1, 'suite'], [sc.cf.s0, sc.s, 'vif']] });
+    ctx.drawImage(dessus, 0, 0);
+    carriere(ctx, ['pion'], { pion: sc.s });
+    mise.mobile(ctx, c, sc, o);
+  };
+  peindre.liberer = () => libererCanvas(dessous, dessus);
+  return peindre;
+}
+
+// L'aperçu d'une vidéo : son image au milieu de la figure f, en JPEG.
+async function afficheVideo(o) {
+  await policesPretes();
+  const D = VIDEO[o.format], can = document.createElement('canvas');
+  can.width = D.l; can.height = D.h;
+  const pl = planVideo(o.quoi, o.f, o.vitesse);
+  const peindre = peintreVideo(Object.assign({}, o, { figure: pl.figure }), couleursDu(o.fond));
+  peindre(can.getContext('2d', { alpha: false }), (tAt(o.f.s0) + tAt(o.f.s1)) / 2);
+  peindre.liberer();
+  return enFichier(can, 'image/jpeg', 0.9);
+}
+
+// Le premier réglage que l'appareil accepte. Main et High peuvent réordonner les images (images B), ce que l'assemblage
+// ne sait pas ranger : le mode « temps réel » l'évite. Le format « avc » est demandé, sinon celui de l'encodeur.
+async function configurationVideo(l, h) {
+  for (const codec of CODECS) {
+    const base = { codec, width: l, height: h, bitrate: VIDEO.debit, framerate: VIDEO.ips, latencyMode: codec.startsWith('avc1.42') ? 'quality' : 'realtime' };
+    for (const config of [Object.assign({ avc: { format: 'avc' } }, base), base]) {
+      try { if ((await VideoEncoder.isConfigSupported(config)).supported) return config; } catch (e) { /* réglage suivant */ }
+    }
+  }
+  return null;
+}
+const attendre = (ms) => new Promise((r) => setTimeout(r, ms));
+// Rend la main au navigateur (la jauge se redessine) sans le délai minimal de setTimeout.
+const ceder = () => new Promise((r) => { const m = new MessageChannel(); m.port1.onmessage = () => r(); m.port2.postMessage(0); });
+const copieOctets = (d) => (ArrayBuffer.isView(d) ? new Uint8Array(d.buffer, d.byteOffset, d.byteLength) : new Uint8Array(d)).slice();
+
+// La vidéo, en MP4. o : { quoi, f, format, fond, vitesse, texte } ; suivi : { progres(part), annule() }.
+// Renvoie null si elle est annulée ; une erreur 'codec' si l'appareil ne sait pas encoder.
+async function fabriquerVideo(o, suivi) {
+  if (!videoPossible()) throw new Error('codec');
+  await policesPretes();
+  const D = VIDEO[o.format], pl = planVideo(o.quoi, o.f, o.vitesse);
+  const config = await configurationVideo(D.l, D.h);
+  if (!config) throw new Error('codec');
+  const can = document.createElement('canvas');
+  can.width = D.l; can.height = D.h;
+  const ctx = can.getContext('2d', { alpha: false });
+  const peindre = peintreVideo(Object.assign({}, o, { figure: pl.figure }), couleursDu(o.fond));
+  const sorties = [];
+  let description = null, panne = null, verrou = null, dernier = -1;
+  const encodeur = new VideoEncoder({
+    output: (morceau, meta) => {
+      const d = meta && meta.decoderConfig && meta.decoderConfig.description;
+      if (d && !description) description = copieOctets(d);
+      // Images dans le désordre (images B) : le MP4 serait faux ; mieux vaut le dire.
+      if (morceau.timestamp <= dernier) panne = panne || new Error('codec');
+      dernier = morceau.timestamp;
+      const donnees = new Uint8Array(morceau.byteLength);
+      morceau.copyTo(donnees);
+      sorties.push({ donnees, cle: morceau.type === 'key' });
+    },
+    error: (e) => { panne = e; },
+  });
+  // L'écran ne doit pas s'éteindre pendant la création (sinon l'appli passe en arrière-plan et l'encodage s'arrête).
+  try { if (navigator.wakeLock) verrou = await navigator.wakeLock.request('screen'); } catch (e) { /* tant pis */ }
+  try {
+    encodeur.configure(config);
+    for (let i = 0; i < pl.total; i++) {
+      if (panne) throw panne;
+      if (suivi.annule()) return null;
+      peindre(ctx, instantVideo(pl, i));
+      const image = new VideoFrame(can, { timestamp: Math.round(i * 1e6 / VIDEO.ips), duration: Math.round(1e6 / VIDEO.ips) });
+      encodeur.encode(image, { keyFrame: i % (2 * VIDEO.ips) === 0 });
+      image.close();
+      while (encodeur.encodeQueueSize > 2 && !panne) await attendre(2);
+      if (i % 10 === 9) { suivi.progres((i + 1) / pl.total); await ceder(); }
+    }
+    await encodeur.flush();
+  } finally {
+    if (encodeur.state !== 'closed') encodeur.close();
+    if (verrou) verrou.release().catch(() => {});
+    peindre.liberer();
+    libererCanvas(can);
+  }
+  if (panne) throw panne;
+  let echantillons;
+  if (description) echantillons = sorties.map((s) => ({ donnees: s.donnees, duree: 90000 / VIDEO.ips, cle: s.cle }));
+  else { // flux « Annex B » : la configuration est dans les images
+    const r = Mp4.avcDepuisAnnexB(sorties.map((s) => s.donnees));
+    description = r.description;
+    echantillons = r.donnees.map((d, i) => ({ donnees: d, duree: 90000 / VIDEO.ips, cle: sorties[i].cle }));
+  }
+  return new Blob([Mp4.assembler({ largeur: D.l, hauteur: D.h, echelle: 90000, description, echantillons })], { type: 'video/mp4' });
 }
 
 // appli/js/partage.js
-// ———————————————— Partager le parcours : une image faite sur l'appareil, envoyée par le partage du téléphone
-// (Messages, WhatsApp, AirDrop, Photos…) ou, à défaut (ordinateur), téléchargée.
-// L'image se prépare dès que la feuille s'ouvre : le partage doit partir tout de suite après le toucher,
-// sinon iOS le refuse.
+// ———————————————— Partager le parcours : une vidéo ou une image faite sur l'appareil, envoyée par le partage
+// du téléphone (Messages, WhatsApp, AirDrop, Photos…) ou, à défaut (ordinateur), téléchargée.
+// L'image se prépare dès que la feuille s'ouvre, la vidéo sur demande (« Créer la vidéo ») : dans les deux cas,
+// le fichier est prêt avant le toucher sur « Partager », car iOS refuse un partage qui ne part pas tout de suite.
 const feuille = document.getElementById('partage');
-const PART = { quoi: 'reprise', fond: 'sombre', blob: null, url: '', jeton: 0 };
+// etape (vidéo) : 'choix', 'creation' (jauge), puis 'prete'. fichier : ce qui sera partagé (PNG ou MP4) ;
+// apercu : l'image montrée (l'image elle-même, ou une image de la vidéo) ; video : l'adresse de la vidéo faite.
+const PART = { quoi: 'reprise', format: 'story', fond: 'sombre', vitesse: 2, texte: true, etape: 'choix', pct: 0, erreur: '',
+  fichier: null, apercu: '', cleApercu: '', video: '', jeton: 0, creation: 0, annule: false };
+const FORMATS = {
+  story: { titre: 'Vidéo story', detail: '9:16 · téléphone' },
+  large: { titre: 'Vidéo écran large', detail: '16:9 · ordinateur, télé' },
+  image: { titre: 'Image', detail: 'Le tracé, à imprimer' },
+};
+// Débit moyen mesuré des vidéos (bits par seconde), pour annoncer la taille avant de les faire.
+const DEBIT_MOYEN = 800000;
 // Le thème affiché (réglages, ou adresse « ?theme= ») ; « auto » suit celui de l'appareil.
 const themeActuel = () => {
   const t = document.documentElement.dataset.theme;
@@ -1394,69 +1913,156 @@ const themeActuel = () => {
 };
 const figureCourante = () => GEO[geoIndex(sAt(R.t) + 1e-3)];
 const partageNatif = () => typeof navigator.share === 'function' && typeof navigator.canShare === 'function';
+const enVideo = () => PART.format !== 'image';
+const optionsVideo = () => ({ quoi: PART.quoi, f: figureCourante(), format: PART.format, fond: PART.fond, vitesse: PART.vitesse, texte: PART.texte });
+const mo = (octets) => (octets / 1e6).toLocaleString('fr-FR', { maximumFractionDigits: 1 }) + ' Mo';
 const nomFichier = () => {
   const base = P.titre.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-  return base + (PART.quoi === 'figure' ? '-figure-' + figureCourante().n : '-fiche') + '.png';
+  const fig = PART.quoi === 'figure' ? '-figure-' + figureCourante().n : '';
+  return enVideo() ? base + fig + (PART.format === 'large' ? '-ecran-large' : '-story') + '.mp4' : base + (fig || '-fiche') + '.png';
 };
+// Ce dont dépend l'aperçu : on ne le refait que s'il change (la vitesse, par exemple, ne change pas l'image).
+const cleApercu = () => [P.id, figureCourante().n, PART.format, PART.fond].concat(enVideo() ? [PART.texte] : [PART.quoi]).join('/');
 
 function ouvrirPartage() {
   arreter();
   PART.quoi = 'reprise';
   PART.fond = themeActuel();
-  rendrePartage();
+  if (!videoPossible()) PART.format = 'image';
+  PART.cleApercu = '';
+  changerPartage();
   if (typeof feuille.showModal === 'function') feuille.showModal(); else feuille.setAttribute('open', '');
-  preparerImage();
+}
+// Fermer la feuille arrête une vidéo en cours de création.
+feuille.addEventListener('close', () => { PART.annule = true; });
+
+// Un choix a changé : la vidéo déjà faite ne vaut plus, et l'aperçu est refait s'il le faut.
+function changerPartage() {
+  PART.etape = 'choix';
+  PART.erreur = '';
+  if (PART.video) { URL.revokeObjectURL(PART.video); PART.video = ''; }
+  if (enVideo()) PART.fichier = null;
+  const cle = cleApercu();
+  if (cle !== PART.cleApercu) {
+    PART.cleApercu = cle;
+    PART.fichier = null;
+    if (PART.apercu) { URL.revokeObjectURL(PART.apercu); PART.apercu = ''; }
+    rendrePartage();
+    preparerApercu();
+  } else rendrePartage();
 }
 
 function rendrePartage() {
-  const f = figureCourante();
-  const choix = (q, titre, detail) => '<button type="button" role="radio" aria-checked="' + (PART.quoi === q) + '" data-action="partage-quoi" data-q="' + q + '"><b>' + esc(titre) + '</b><span>' + esc(detail) + '</span></button>';
-  const fond = (t, nom) => '<button type="button" data-action="partage-fond" data-f="' + t + '" aria-pressed="' + (PART.fond === t) + '">' + nom + '</button>';
-  feuille.innerHTML = '<div class="feuille">' +
+  const f = figureCourante(), video = enVideo(), occupe = PART.etape === 'creation' ? ' disabled' : '';
+  const radio = (action, attr, actif, contenu) => '<button type="button" role="radio" aria-checked="' + actif + '" data-action="' + action + '" ' + attr + occupe + '>' + contenu + '</button>';
+  const choix = (q, titre, detail) => radio('partage-quoi', 'data-q="' + q + '"', PART.quoi === q, '<b>' + esc(titre) + '</b><span>' + esc(detail) + '</span>');
+  const format = (k) => radio('partage-format', 'data-format="' + k + '"', PART.format === k, '<i class="cadre-' + k + '" aria-hidden="true"></i><b>' + FORMATS[k].titre + '</b><span>' + FORMATS[k].detail + '</span>');
+  const segment = (action, attr, actif, nom) => '<button type="button" data-action="' + action + '" ' + attr + ' aria-pressed="' + actif + '"' + occupe + '>' + nom + '</button>';
+  const dureeFigure = tAt(f.s1) - tAt(f.s0);
+  feuille.innerHTML = '<div class="feuille' + (video ? ' en-video' : '') + '">' +
     '<div class="poignee" aria-hidden="true"></div>' +
     '<div class="dlg-tete"><h2 id="partage-titre">Partager le parcours</h2><button type="button" class="bouton-icone" data-action="partage-fermer" aria-label="Fermer">' + I.fermer + '</button></div>' +
     '<div class="choix" role="radiogroup" aria-label="Ce que tu partages">' +
-      choix('reprise', 'Toute la reprise', 'La fiche mémo : le tracé et les ' + NB_NOTEES + ' figures') +
-      choix('figure', 'La figure ' + f.n, f.lettres + ' · ' + f.court) +
+      choix('reprise', 'Toute la reprise', video ? NB_NOTEES + ' figures · ' + mmss(T.duree) : 'La fiche mémo : le tracé et les ' + NB_NOTEES + ' figures') +
+      choix('figure', 'La figure ' + f.n, f.lettres + ' · ' + (video ? mmss(dureeFigure) : f.court)) +
     '</div>' +
-    '<div class="segments deux" role="group" aria-label="Fond de l\'image">' + fond('sombre', 'Fond sombre') + fond('clair', 'Fond clair') + '</div>' +
-    '<figure class="apercu"><img id="partage-apercu" alt="" hidden><div class="attente" id="partage-attente">Préparation de l\'image…</div></figure>' +
-    '<button type="button" class="btn btn-principal" data-action="partage-envoyer" id="partage-envoyer" disabled>' + I.partager + (partageNatif() ? 'Partager l\'image' : 'Télécharger l\'image') + '</button>' +
-    '<p class="discret">Une image de 1080 × 1920, faite sur cet appareil : rien n\'est envoyé ailleurs.</p>' +
+    '<div class="choix formats" role="radiogroup" aria-label="Format">' + Object.keys(FORMATS).map(format).join('') + '</div>' +
+    '<div class="reglages-partage">' +
+      '<div class="segments deux" role="group" aria-label="Fond">' +
+        segment('partage-fond', 'data-f="sombre"', PART.fond === 'sombre', video ? 'Sombre' : 'Fond sombre') +
+        segment('partage-fond', 'data-f="clair"', PART.fond === 'clair', video ? 'Clair' : 'Fond clair') + '</div>' +
+      (video ? '<div class="segments deux" role="group" aria-label="Vitesse">' + [1, 2].map((v) => segment('partage-vitesse', 'data-v="' + v + '"', PART.vitesse === v, '×' + v)).join('') + '</div>' : '') +
+    '</div>' +
+    (video ? '<label class="case"><input type="checkbox" data-action="partage-texte"' + (PART.texte ? ' checked' : '') + occupe + '>Le texte des figures à l\'écran</label>' : '') +
+    '<figure class="apercu' + (PART.format === 'large' ? ' large' : '') + '">' +
+      (PART.video
+        ? '<video id="partage-video" src="' + PART.video + '"' + (PART.apercu ? ' poster="' + PART.apercu + '"' : '') + ' controls playsinline muted preload="metadata"></video>'
+        : '<img id="partage-apercu" alt="' + (PART.apercu ? texteApercu() : '') + '"' + (PART.apercu ? ' src="' + PART.apercu + '"' : ' hidden') + '>' +
+          '<div class="attente" id="partage-attente"' + (PART.apercu ? ' hidden' : '') + '>Préparation de l\'aperçu…</div>') +
+    '</figure>' +
+    basPartage() +
   '</div>';
 }
+const texteApercu = () => (enVideo() ? 'Aperçu : une image de la vidéo' : PART.quoi === 'figure' ? 'Aperçu : la carte de la figure ' + figureCourante().n : 'Aperçu : la fiche mémo de la reprise');
 
-async function preparerImage() {
-  const jeton = ++PART.jeton;
-  PART.blob = null;
+// Le bas de la feuille : le bouton d'action et une ligne d'explication, selon l'étape.
+function basPartage() {
+  const bouton = (action, contenu, inactif) => '<button type="button" class="btn btn-principal" data-action="' + action + '" id="partage-envoyer"' + (inactif ? ' disabled' : '') + '>' + contenu + '</button>';
+  const note = (t, classe) => '<p class="' + (classe || 'discret') + '">' + t + '</p>';
+  if (!enVideo()) {
+    return bouton('partage-envoyer', I.partager + (partageNatif() ? 'Partager l\'image' : 'Télécharger l\'image'), !PART.fichier) +
+      note('Une image de 1080 × 1920, faite sur cet appareil : rien n\'est envoyé ailleurs.');
+  }
+  const pl = planVideo(PART.quoi, figureCourante(), PART.vitesse);
+  if (PART.etape === 'creation') {
+    return '<div class="creation"><div class="zone"><div class="titre"><span>Création de la vidéo…</span><span id="partage-pct" aria-hidden="true">' + PART.pct + ' %</span></div>' +
+      '<div class="jauge" id="partage-jauge" role="progressbar" aria-label="Création de la vidéo" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + PART.pct + '"><div style="width:' + PART.pct + '%"></div></div></div>' +
+      '<button type="button" class="btn btn-petit" data-action="partage-annuler">Annuler</button></div>' +
+      note('Garde l\'appli ouverte et l\'écran allumé jusqu\'à la fin.');
+  }
+  if (PART.etape === 'prete') {
+    return bouton('partage-envoyer', I.partager + (partageNatif() ? 'Partager la vidéo' : 'Télécharger la vidéo'), false) +
+      note('Vidéo prête · ' + mmss(pl.duree) + ' · ' + mo(PART.fichier.size) + ' · faite sur cet appareil.');
+  }
+  if (!videoPossible()) return bouton('partage-creer', 'Créer la vidéo', true) + note('Cet appareil ne sait pas faire de vidéo (il faut iOS 16.4 ou plus récent). L\'image, elle, se partage.', 'erreur');
+  const estime = Math.max(1, Math.round(pl.duree * DEBIT_MOYEN / 8e6));
+  return bouton('partage-creer', 'Créer la vidéo · ' + mmss(pl.duree) + ' · ≈ ' + estime + ' Mo', false) +
+    (PART.erreur ? note(PART.erreur, 'erreur') : note('Elle se fabrique sur ton téléphone, en quelques dizaines de secondes. Rien n\'est envoyé ailleurs.'));
+}
+
+async function preparerApercu() {
+  const jeton = ++PART.jeton, video = enVideo();
   try {
-    const blob = await imageAPartager(PART.quoi, figureCourante(), PART.fond);
-    if (jeton !== PART.jeton) return; // un autre choix entre-temps : sa propre image arrive
-    PART.blob = blob;
-    if (PART.url) URL.revokeObjectURL(PART.url);
-    PART.url = URL.createObjectURL(blob);
+    const blob = video ? await afficheVideo(optionsVideo()) : await imageAPartager(PART.quoi, figureCourante(), PART.fond);
+    if (jeton !== PART.jeton) return; // un autre choix entre-temps : son propre aperçu arrive
+    if (!video) PART.fichier = blob;
+    PART.apercu = URL.createObjectURL(blob);
     const img = document.getElementById('partage-apercu'), attente = document.getElementById('partage-attente');
-    if (!img) return;
-    img.src = PART.url;
-    img.alt = PART.quoi === 'figure' ? 'Aperçu : la carte de la figure ' + figureCourante().n : 'Aperçu : la fiche mémo de la reprise';
-    img.hidden = false;
-    attente.hidden = true;
-    document.getElementById('partage-envoyer').disabled = false;
+    if (img) { img.src = PART.apercu; img.alt = texteApercu(); img.hidden = false; attente.hidden = true; }
+    const b = document.getElementById('partage-envoyer');
+    if (b && !video) b.disabled = false;
   } catch (e) {
     const attente = document.getElementById('partage-attente');
-    if (attente && jeton === PART.jeton) attente.textContent = 'L\'image n\'a pas pu être faite sur cet appareil.';
+    if (attente && jeton === PART.jeton) attente.textContent = 'L\'aperçu n\'a pas pu être fait sur cet appareil.';
   }
 }
 
+async function creerVideo() {
+  if (PART.etape !== 'choix') return;
+  const jeton = ++PART.creation;
+  PART.etape = 'creation'; PART.pct = 0; PART.annule = false; PART.erreur = '';
+  rendrePartage();
+  let blob = null;
+  try {
+    blob = await fabriquerVideo(optionsVideo(), {
+      progres: (part) => {
+        if (jeton !== PART.creation) return;
+        PART.pct = Math.floor(100 * part);
+        const pct = document.getElementById('partage-pct'), jauge = document.getElementById('partage-jauge');
+        if (pct) pct.textContent = PART.pct + ' %';
+        if (jauge) { jauge.setAttribute('aria-valuenow', PART.pct); jauge.firstChild.style.width = PART.pct + '%'; }
+      },
+      annule: () => PART.annule || jeton !== PART.creation,
+    });
+  } catch (e) {
+    PART.erreur = e && e.message === 'codec'
+      ? 'Cet appareil ne sait pas encoder cette vidéo. L\'image, elle, se partage.'
+      : 'La vidéo s\'est arrêtée en route (l\'appli est-elle passée en arrière-plan ?). Réessaie en gardant l\'écran allumé.';
+  }
+  if (jeton !== PART.creation) return; // une autre création a pris la suite
+  if (blob) { PART.fichier = blob; PART.video = URL.createObjectURL(blob); PART.etape = 'prete'; } else PART.etape = 'choix';
+  rendrePartage();
+}
+
 function envoyerPartage() {
-  if (!PART.blob) return;
-  const nom = nomFichier(), fichier = new File([PART.blob], nom, { type: 'image/png' });
+  if (!PART.fichier || (enVideo() && PART.etape !== 'prete')) return;
+  const nom = nomFichier(), fichier = new File([PART.fichier], nom, { type: enVideo() ? 'video/mp4' : 'image/png' });
   if (partageNatif() && navigator.canShare({ files: [fichier] })) {
     navigator.share({ files: [fichier], title: P.titre }).catch(() => { /* partage annulé : rien à faire */ });
     return;
   }
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(PART.blob);
+  a.href = URL.createObjectURL(PART.fichier);
   a.download = nom;
   document.body.appendChild(a);
   a.click();
@@ -1750,8 +2356,13 @@ const ACTIONS = {
   // Partager le parcours (partage.js).
   partager: ouvrirPartage,
   'partage-fermer': () => feuille.close(),
-  'partage-quoi': (b) => { PART.quoi = b.dataset.q; rendrePartage(); preparerImage(); },
-  'partage-fond': (b) => { PART.fond = b.dataset.f; rendrePartage(); preparerImage(); },
+  'partage-quoi': (b) => { PART.quoi = b.dataset.q; changerPartage(); },
+  'partage-format': (b) => { PART.format = b.dataset.format; changerPartage(); },
+  'partage-fond': (b) => { PART.fond = b.dataset.f; changerPartage(); },
+  'partage-vitesse': (b) => { PART.vitesse = Number(b.dataset.v); changerPartage(); },
+  'partage-texte': () => { PART.texte = !PART.texte; changerPartage(); },
+  'partage-creer': creerVideo,
+  'partage-annuler': () => { PART.annule = true; },
   'partage-envoyer': envoyerPartage,
   lettre: (b) => repondre(b.dataset.l),
   indice: () => { Q.indice = true; dessinerQuiz(); },

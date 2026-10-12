@@ -384,6 +384,30 @@ dialog::backdrop { background: rgba(5, 10, 20, 0.6); }
 .ligne-btn input[type="file"] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 .danger { align-self: flex-start; border: 0; background: none; padding: 4px 0; color: var(--arret); font-weight: 700; text-decoration: underline; }
 
+/* ———————————————— Partager : une feuille qui monte du bas de l'écran.
+   La marge de la barre d'accueil est celle de la feuille elle-même, pas de son contenu : rien n'est dessous. */
+#partage { inset: auto 0 0 0; margin: 0 auto; width: min(520px, 100vw); max-height: calc(100vh - var(--sa-h) - 8px); max-height: calc(100dvh - var(--sa-h) - 8px); padding: 0 0 var(--sa-b); border-width: 1.5px 1.5px 0; border-radius: 22px 22px 0 0; background: var(--fond); }
+.feuille { display: flex; flex-direction: column; gap: 12px; padding: 8px 16px 14px; }
+.feuille .poignee { align-self: center; width: 40px; height: 5px; border-radius: 5px; background: var(--bord-fort); }
+.feuille h2 { font: 800 24px var(--condense); letter-spacing: 0.03em; text-transform: uppercase; }
+.choix { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.choix button { min-height: 64px; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 3px; padding: 8px 10px; border-radius: 12px; border: 2px solid var(--bord); background: var(--surface); color: var(--texte); text-align: left; }
+.choix button[aria-checked="true"] { border-color: var(--accent); background: var(--accent-voile); }
+.choix b { font: 800 17px/1.1 var(--condense); letter-spacing: 0.02em; text-transform: uppercase; }
+.choix span { font-size: 12px; font-weight: 600; line-height: 1.25; color: var(--muet); }
+.segments.deux { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.apercu { margin: 0; display: grid; place-items: center; }
+.apercu img, .apercu .attente { height: min(320px, 36vh); height: min(320px, 36dvh); aspect-ratio: 9 / 16; border-radius: 10px; border: 1px solid var(--bord); }
+.apercu .attente { display: grid; place-items: center; padding: 10px; background: var(--surface); font-size: 12.5px; font-weight: 600; text-align: center; color: var(--muet); }
+.feuille .btn svg { width: 20px; height: 20px; }
+/* Très petits écrans : un aperçu plus bas, sans la phrase d'explication, pour que tout tienne sans défiler. */
+@media (max-height: 600px) {
+  .feuille { gap: 9px; }
+  .feuille h2 { font-size: 21px; }
+  .apercu img, .apercu .attente { height: 27vh; height: 27dvh; }
+  .feuille .discret { display: none; }
+}
+
 /* ———————————————— Très petits écrans (320 px) */
 @media (max-width: 359px) {
   .commandes { gap: 6px; }
@@ -466,6 +490,7 @@ dialog::backdrop { background: rgba(5, 10, 20, 0.6); }
     </div>
   </form>
 </dialog>
+<dialog id="partage" aria-labelledby="partage-titre"></dialog>
 <script type="application/json" id="reprise-dressage"></script>
 <script>
 (() => {
@@ -971,7 +996,7 @@ function regarder(arg) {
   suivreTaille(racine);
 }
 
-// La vue en grand : fiche compacte, carrière, et à droite un rail (sortie, frise des figures, commandes).
+// La vue en grand : fiche compacte, carrière, et à droite un rail (partage, sortie, frise des figures, commandes).
 // La progression est l'anneau autour du bouton de lecture.
 const ANNEAU = 150.8; // circonférence de l'anneau (rayon 24)
 const vueEnGrand = () =>
@@ -980,6 +1005,7 @@ const vueEnGrand = () =>
     '<div class="scene">' +
       '<div class="plateau"><div class="plateau-in" id="plateau-in"></div></div>' +
       '<div class="rail">' +
+        '<button type="button" class="rail-btn" data-action="partager" aria-label="Partager le parcours">' + I.partager + '</button>' +
         '<button type="button" class="rail-btn" data-action="reduire" aria-label="Revenir à la vue habituelle">' + I.reduire + '</button>' +
         '<ol class="frise" id="frise" aria-label="Les figures"></ol>' +
         '<button type="button" class="rond" data-action="precedente" aria-label="Figure précédente">' + I.prec + '</button>' +
@@ -1122,6 +1148,319 @@ function allerFig(i) {
   arreter();
   R.t = i >= GEO.length ? T.duree : tAt(GEO[Math.max(0, i)].s0 + 0.05);
   dessiner();
+}
+
+// appli/js/dessin.js
+// ———————————————— Dessin de la carrière sur un canvas : images à partager (et vidéos, plus tard)
+// Même rendu que le SVG de l'appli (styles/carriere.css) : couleurs du thème, tracé par allure, arrêts,
+// plaques. La géométrie se dessine en mètres (contexte mis à l'échelle) ; le texte, en pixels, reste net.
+
+// Couleurs d'un thème, lues dans la feuille de style (themes.css) : on bascule l'attribut le temps de lire,
+// sans que l'écran ait le temps de changer.
+const COULEURS = ['fond', 'surface', 'surface-2', 'bord', 'bord-fort', 'texte', 'texte-2', 'muet', 'accent', 'accent-texte', 'sur-accent',
+  'sol', 'sol-plein', 'lice', 'lice-ext', 'milieu', 'fantome', 'pas', 'trot', 'galop', 'arret', 'approche', 'plaque', 'plaque-bord', 'plaque-texte',
+  'pion', 'pion-bord', 'pion-coeur'];
+function couleursDu(theme) {
+  const racine = document.documentElement, avant = racine.getAttribute('data-theme');
+  racine.setAttribute('data-theme', theme);
+  const cs = getComputedStyle(racine), c = {};
+  COULEURS.forEach((n) => { c[n] = cs.getPropertyValue('--' + n).trim(); });
+  if (avant === null) racine.removeAttribute('data-theme'); else racine.setAttribute('data-theme', avant);
+  return c;
+}
+
+// Le style de trait de chaque allure, en mètres (comme .t-pas, .t-trot… dans carriere.css).
+const TRAITS = {
+  approche: { c: 'approche', l: 0.5, t: [1, 1] },
+  pas: { c: 'pas', l: 0.78, t: [0.01, 1.3] },
+  'pas-allonge': { c: 'pas', l: 0.85, t: [0.01, 1.05] },
+  'pas-libre': { c: 'pas', l: 0.78, t: [0.01, 1.6] },
+  trot: { c: 'trot', l: 0.82, t: [] },
+  'galop-d': { c: 'galop', l: 1.05, t: [] },
+  'galop-g': { c: 'galop', l: 1.05, t: [] },
+};
+const POLICE = (graisse, taille, condensee) => graisse + ' ' + taille + 'px ' + (condensee ? '"Barlow Condensed", "Arial Narrow", sans-serif' : 'Barlow, system-ui, sans-serif');
+// Les polices de l'appli doivent être chargées avant de dessiner du texte dans un canvas.
+const policesPretes = () => (document.fonts && document.fonts.load
+  ? Promise.all(['800 40px "Barlow Condensed"', '700 40px "Barlow Condensed"', '500 40px Barlow', '600 40px Barlow', '700 40px Barlow'].map((f) => document.fonts.load(f))).catch(() => {})
+  : Promise.resolve());
+
+function rondRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+function cercle(ctx, x, y, r) { ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); }
+
+// Un morceau du tracé (de l'abscisse a à b), allure par allure. mode : 'plein', 'faits' (pâle),
+// 'vif' (avec son halo) ou 'suite' (pointillés fins) — comme morceaux() pour le SVG.
+function tracerMorceaux(ctx, c, a, b, mode) {
+  T.allures.forEach((seg) => {
+    const x0 = Math.max(a, seg.s0), x1 = Math.min(b, seg.s1);
+    if (x1 - x0 <= 0.02) return;
+    const chemin = new Path2D(trace(x0, x1)), st = TRAITS[seg.code] || TRAITS.approche;
+    ctx.globalAlpha = mode === 'faits' ? 0.32 : mode === 'suite' ? 0.7 : 1;
+    if (mode === 'vif') {
+      ctx.save(); ctx.globalAlpha = 0.16; ctx.strokeStyle = c[st.c]; ctx.lineWidth = 2.4; ctx.setLineDash([]); ctx.stroke(chemin); ctx.restore();
+    }
+    ctx.strokeStyle = c[st.c];
+    ctx.lineWidth = mode === 'suite' ? 0.45 : st.l;
+    ctx.setLineDash(mode === 'suite' ? [0.7, 0.9] : st.t);
+    ctx.stroke(chemin);
+    if (mode !== 'suite' && famille(seg.code) === 'galop') { ctx.strokeStyle = c['sol-plein']; ctx.lineWidth = 0.3; ctx.setLineDash([]); ctx.stroke(chemin); }
+  });
+  ctx.globalAlpha = 1;
+  ctx.setLineDash([]);
+}
+
+// La carrière, coin haut-gauche de ses marges en (x, y), à l'échelle k (pixels par mètre).
+// o : { morceaux: [[a, b, mode], …], marquesJusqua, actives: { lettre: true }, fantome, pion: abscisse }
+function dessinerCarriere(ctx, x, y, k, c, o) {
+  const ox = x + 5 * k, oy = y + 5 * k;
+  ctx.save();
+  ctx.setTransform(k, 0, 0, k, ox, oy);
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  rondRect(ctx, -0.45, -0.45, T.W + 0.9, T.L + 0.9, 0.8);
+  if (c['lice-ext'] !== 'transparent') { ctx.strokeStyle = c['lice-ext']; ctx.lineWidth = 0.25; ctx.stroke(); }
+  rondRect(ctx, 0, 0, T.W, T.L, 0.5);
+  ctx.fillStyle = c.sol; ctx.fill();
+  ctx.strokeStyle = c.lice; ctx.lineWidth = 0.35; ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(T.W / 2, 0.7); ctx.lineTo(T.W / 2, T.L - 0.7);
+  ctx.strokeStyle = c.milieu; ctx.lineWidth = 0.2; ctx.setLineDash([1, 1.2]); ctx.stroke(); ctx.setLineDash([]);
+  CENTRE.forEach((l) => { cercle(ctx, l.x, l.y, 0.3); ctx.fillStyle = c.milieu; ctx.fill(); });
+  if (o.fantome) {
+    T.allures.forEach((a) => { ctx.strokeStyle = c.fantome; ctx.lineWidth = 0.3; ctx.setLineDash([0.8, 1]); ctx.stroke(new Path2D(trace(a.s0, a.s1))); });
+    ctx.setLineDash([]);
+  }
+  (o.morceaux || []).forEach(([a, b, mode]) => tracerMorceaux(ctx, c, a, b, mode));
+  T.evenements.filter((e) => e.s <= (o.marquesJusqua == null ? -1 : o.marquesJusqua) + 1e-6 && !(e.type === 'transition' && ARRETS[e.s])).forEach((e) => {
+    if (e.type === 'arret') { cercle(ctx, e.x, e.y, 0.95); ctx.fillStyle = c.arret; ctx.fill(); ctx.strokeStyle = c.surface; ctx.lineWidth = 0.3; ctx.stroke(); }
+    else { cercle(ctx, e.x, e.y, 0.6); ctx.fillStyle = c.surface; ctx.fill(); ctx.strokeStyle = c[(TRAITS[e.code] || TRAITS.approche).c]; ctx.lineWidth = 0.3; ctx.stroke(); }
+  });
+  PLAQUES.forEach((p) => {
+    rondRect(ctx, p.x - 1.8, p.y - 1.8, 3.6, 3.6, 0.5);
+    ctx.fillStyle = o.actives && o.actives[p.n] ? c.accent : c.plaque; ctx.fill();
+    ctx.strokeStyle = c['plaque-bord']; ctx.lineWidth = 0.2; ctx.stroke();
+  });
+  if (o.pion != null) {
+    const p = ptAt(o.pion), a = ptAt(Math.max(0, o.pion - 0.4)), b = ptAt(Math.min(T.total, o.pion + 0.4));
+    ctx.translate(p[0], p[1]);
+    ctx.rotate(Math.atan2(b[1] - a[1], b[0] - a[0]));
+    cercle(ctx, 0, 0, 2.4); ctx.globalAlpha = 0.22; ctx.fillStyle = c['pion-coeur']; ctx.fill(); ctx.globalAlpha = 1;
+    const forme = new Path2D('M2.15 0L0.42 -1.24A1.3 1.3 0 1 0 0.42 1.24Z');
+    ctx.fillStyle = c.pion; ctx.fill(forme); ctx.strokeStyle = c['pion-bord']; ctx.lineWidth = 0.3; ctx.stroke(forme);
+    cercle(ctx, -0.15, 0, 0.42); ctx.fillStyle = c['pion-coeur']; ctx.fill();
+  }
+  ctx.restore();
+  // Les lettres, en pixels (un texte minuscule agrandi par le contexte serait flou).
+  ctx.textBaseline = 'alphabetic';
+  ctx.font = POLICE(700, 1.6 * k, true); ctx.fillStyle = c.muet; ctx.textAlign = 'left';
+  CENTRE.forEach((l) => ctx.fillText(l.n, ox + (l.x + 0.7) * k, oy + (l.y + 0.55) * k));
+  ctx.font = POLICE(800, 2.7 * k, true); ctx.fillStyle = c['plaque-texte']; ctx.textAlign = 'center';
+  PLAQUES.forEach((p) => ctx.fillText(p.n, ox + p.x * k, oy + (p.y + 0.95) * k));
+}
+
+// ———————————————— Texte : une ligne coupée à la largeur, ou un paragraphe fait de morceaux de styles différents
+function tronquer(ctx, t, police, largeur) {
+  ctx.font = police;
+  if (ctx.measureText(t).width <= largeur) return t;
+  let s = t;
+  while (s.length > 1 && ctx.measureText(s + '…').width > largeur) s = s.slice(0, -1);
+  return s.trimEnd() + '…';
+}
+function inscrire(ctx, t, x, y, police, couleur, align) {
+  ctx.font = police; ctx.fillStyle = couleur; ctx.textAlign = align || 'left'; ctx.textBaseline = 'alphabetic';
+  ctx.fillText(t, x, y);
+}
+// morceaux : [{ t, police, couleur }]. Écrit à partir de la ligne de base y ; renvoie la hauteur occupée.
+// Avec dessiner = false, mesure seulement.
+function paragraphe(ctx, morceaux, x, y, largeur, interligne, dessiner) {
+  let cx = x, cy = y;
+  morceaux.forEach((m) => {
+    ctx.font = m.police;
+    m.t.split(/(\s+)/).forEach((mot) => {
+      if (!mot) return;
+      const w = ctx.measureText(mot).width;
+      if (/^\s+$/.test(mot)) { if (cx > x) cx += w; return; }
+      if (cx > x && cx + w > x + largeur) { cx = x; cy += interligne; }
+      if (dessiner !== false) { ctx.fillStyle = m.couleur; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic'; ctx.fillText(mot, cx, cy); }
+      cx += w;
+    });
+  });
+  return cy - y + interligne;
+}
+
+// ———————————————— Images à partager, 1080 × 1920 (format d'écran de téléphone)
+// Fond uni, comme celui de l'appli : net à l'impression, et léger (un dégradé se compresse mal en PNG).
+const IMAGE = { l: 1080, h: 1920, marge: 44 };
+function fondImage(ctx, c) {
+  ctx.fillStyle = c.fond; ctx.fillRect(0, 0, IMAGE.l, IMAGE.h);
+}
+const couleurFigure = (f, c) => (f.note ? c['bord-fort'] : c[(TRAITS[f.allures[f.allures.length - 1]] || TRAITS.approche).c]);
+function signature(ctx, c, y) { inscrire(ctx, 'MA REPRISE', IMAGE.l - IMAGE.marge, y, POLICE(800, 34, true), c['texte-2'], 'right'); }
+
+// La fiche mémo : le tracé complet, les figures dans l'ordre, la légende des allures.
+function dessinerFiche(ctx, c) {
+  const M = IMAGE.marge, W = IMAGE.l;
+  inscrire(ctx, P.titre.toUpperCase(), M, M + 64, POLICE(800, 80, true), c.texte);
+  inscrire(ctx, (P.federation + ' · protocole du ' + P.versionProtocole + ' · carrière ' + T.W + ' × ' + T.L).toUpperCase(), M, M + 112, POLICE(700, 30), c.muet);
+  const haut = 196, hMax = 1480;
+  const k = Math.min(hMax / (T.L + 10), 0.62 * (W - 2 * M) / (T.W + 10));
+  const lCar = (T.W + 10) * k, hCar = (T.L + 10) * k;
+  dessinerCarriere(ctx, M, haut, k, c, { morceaux: [[0, T.total, 'plein']], marquesJusqua: T.total });
+  // Les figures, à droite de la carrière.
+  const x0 = M + lCar + 30, largeur = W - M - x0, pas = Math.min(84, hCar / FIGS.length);
+  FIGS.forEach((f, i) => {
+    const y = haut + i * pas, hP = Math.min(52, pas - 10);
+    rondRect(ctx, x0, y + (pas - hP) / 2, 62, hP, 9);
+    ctx.fillStyle = couleurFigure(f, c); ctx.fill();
+    inscrire(ctx, f.sortie ? 'FIN' : String(f.n), x0 + 31, y + pas / 2 + 11, POLICE(800, f.sortie ? 24 : 32, true), f.note ? c.texte : c.fond, 'center');
+    // Comme le chemin des figures de l'appli : « Note · position au trot ».
+    const l1 = f.note ? 'Note' : f.sortie ? 'Sortie' : f.lettres, l2 = f.note ? f.court.replace('Note : ', '') : f.court;
+    inscrire(ctx, tronquer(ctx, l1, POLICE(800, 30, true), largeur - 78), x0 + 78, y + pas / 2 - 2, POLICE(800, 30, true), c.texte);
+    inscrire(ctx, tronquer(ctx, l2, POLICE(600, 23), largeur - 78), x0 + 78, y + pas / 2 + 26, POLICE(600, 23), c['texte-2']);
+  });
+  // Légende des allures, puis le résumé.
+  let x = M;
+  const yL = haut + hCar + 70;
+  [['Pas', 'pas', [2, 13]], ['Trot', 'trot', []], ['Galop', 'galop', []]].forEach(([nom, coul, tirets]) => {
+    ctx.beginPath(); ctx.moveTo(x, yL - 11); ctx.lineTo(x + 56, yL - 11);
+    ctx.strokeStyle = c[coul]; ctx.lineWidth = coul === 'galop' ? 10 : 8; ctx.lineCap = 'round'; ctx.setLineDash(tirets); ctx.stroke(); ctx.setLineDash([]);
+    inscrire(ctx, nom, x + 74, yL, POLICE(700, 32), c['texte-2']);
+    x += 74 + ctx.measureText(nom).width + 44;
+  });
+  cercle(ctx, x + 12, yL - 11, 12); ctx.fillStyle = c.arret; ctx.fill();
+  inscrire(ctx, 'Arrêt', x + 38, yL, POLICE(700, 32), c['texte-2']);
+  const minutes = Math.floor(T.duree / 60) + ' min ' + String(Math.round(T.duree % 60)).padStart(2, '0');
+  inscrire(ctx, NB_NOTEES + ' figures · ' + minutes + ' · barème ' + P.bareme.figures + ' points', M, IMAGE.h - M, POLICE(700, 30), c.muet);
+  signature(ctx, c, IMAGE.h - M);
+}
+
+// La carte d'une figure : son tracé (les précédentes en pâle), son texte, et ce que regarde le juge.
+function dessinerCarte(ctx, c, f) {
+  const M = IMAGE.marge, W = IMAGE.l, l = W - 2 * M;
+  ctx.font = POLICE(800, 190, true);
+  const lNum = ctx.measureText(String(f.n)).width;
+  inscrire(ctx, String(f.n), M, M + 150, POLICE(800, 190, true), c['accent-texte']);
+  const xT = M + lNum + 34, lT = W - M - xT;
+  inscrire(ctx, tronquer(ctx, (P.titre + ' · figure ' + f.n + ' sur ' + NB_NOTEES + (f.coef ? ' · coef. ' + f.coef : '')).toUpperCase(), POLICE(700, 28), lT), xT, M + 30, POLICE(700, 28), c.muet);
+  inscrire(ctx, tronquer(ctx, f.lettres, POLICE(800, 84, true), lT), xT, M + 112, POLICE(800, 84, true), c.texte);
+  inscrire(ctx, tronquer(ctx, f.court + ' · ' + mainTexte(f).toLowerCase(), POLICE(600, 40), lT), xT, M + 160, POLICE(600, 40), c['texte-2']);
+  // Les textes du bas sont mesurés d'abord : la carrière prend la hauteur qui reste.
+  const lignes = f.lignes.map((ln) => [{ t: (ln[0] ? ln[0] + ' ' : ''), police: POLICE(800, 44, true), couleur: c.texte }, { t: ln[1], police: POLICE(600, 38), couleur: c['texte-2'] }]);
+  const hLignes = lignes.reduce((h, m) => h + paragraphe(ctx, m, 0, 0, l, 50, false), 0);
+  const idees = [{ t: f.idees || '', police: POLICE(500, 33), couleur: c['texte-2'] }];
+  const hIdees = f.idees ? paragraphe(ctx, idees, 0, 0, l - 48, 44, false) + 92 : 0;
+  const yBas = IMAGE.h - M - 46 - hIdees - (hIdees ? 24 : 0) - hLignes;
+  const haut = M + 196, k = Math.min((yBas - 30 - haut) / (T.L + 10), l / (T.W + 10));
+  dessinerCarriere(ctx, (W - (T.W + 10) * k) / 2, haut, k, c, { morceaux: [[0, f.s0, 'faits'], [f.s0, f.s1, 'vif']], marquesJusqua: f.s1, actives: f.set });
+  let y = yBas + 38;
+  lignes.forEach((m) => { y += paragraphe(ctx, m, M, y, l, 50); });
+  if (f.idees) {
+    const yC = y - 38 + 24;
+    rondRect(ctx, M, yC, l, hIdees, 22);
+    ctx.fillStyle = c.surface; ctx.globalAlpha = 0.9; ctx.fill(); ctx.globalAlpha = 1;
+    ctx.strokeStyle = c.bord; ctx.lineWidth = 2; ctx.stroke();
+    inscrire(ctx, 'CE QUE REGARDE LE JUGE', M + 24, yC + 50, POLICE(700, 26), c.muet);
+    paragraphe(ctx, idees, M + 24, yC + 100, l - 48, 44);
+  }
+  signature(ctx, c, IMAGE.h - M);
+}
+
+// L'image demandée, en PNG : quoi = 'reprise' (fiche mémo) ou 'figure' (carte de la figure f).
+async function imageAPartager(quoi, f, theme) {
+  await policesPretes();
+  const can = document.createElement('canvas');
+  can.width = IMAGE.l; can.height = IMAGE.h;
+  const ctx = can.getContext('2d'), c = couleursDu(theme);
+  fondImage(ctx, c);
+  if (quoi === 'figure') dessinerCarte(ctx, c, f); else dessinerFiche(ctx, c);
+  return new Promise((ok, ko) => can.toBlob((b) => (b ? ok(b) : ko(new Error('image impossible'))), 'image/png'));
+}
+
+// appli/js/partage.js
+// ———————————————— Partager le parcours : une image faite sur l'appareil, envoyée par le partage du téléphone
+// (Messages, WhatsApp, AirDrop, Photos…) ou, à défaut (ordinateur), téléchargée.
+// L'image se prépare dès que la feuille s'ouvre : le partage doit partir tout de suite après le toucher,
+// sinon iOS le refuse.
+const feuille = document.getElementById('partage');
+const PART = { quoi: 'reprise', fond: 'sombre', blob: null, url: '', jeton: 0 };
+// Le thème affiché (réglages, ou adresse « ?theme= ») ; « auto » suit celui de l'appareil.
+const themeActuel = () => {
+  const t = document.documentElement.dataset.theme;
+  return t === 'sombre' || t === 'clair' ? t : (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'sombre' : 'clair');
+};
+const figureCourante = () => GEO[geoIndex(sAt(R.t) + 1e-3)];
+const partageNatif = () => typeof navigator.share === 'function' && typeof navigator.canShare === 'function';
+const nomFichier = () => {
+  const base = P.titre.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  return base + (PART.quoi === 'figure' ? '-figure-' + figureCourante().n : '-fiche') + '.png';
+};
+
+function ouvrirPartage() {
+  arreter();
+  PART.quoi = 'reprise';
+  PART.fond = themeActuel();
+  rendrePartage();
+  if (typeof feuille.showModal === 'function') feuille.showModal(); else feuille.setAttribute('open', '');
+  preparerImage();
+}
+
+function rendrePartage() {
+  const f = figureCourante();
+  const choix = (q, titre, detail) => '<button type="button" role="radio" aria-checked="' + (PART.quoi === q) + '" data-action="partage-quoi" data-q="' + q + '"><b>' + esc(titre) + '</b><span>' + esc(detail) + '</span></button>';
+  const fond = (t, nom) => '<button type="button" data-action="partage-fond" data-f="' + t + '" aria-pressed="' + (PART.fond === t) + '">' + nom + '</button>';
+  feuille.innerHTML = '<div class="feuille">' +
+    '<div class="poignee" aria-hidden="true"></div>' +
+    '<div class="dlg-tete"><h2 id="partage-titre">Partager le parcours</h2><button type="button" class="bouton-icone" data-action="partage-fermer" aria-label="Fermer">' + I.fermer + '</button></div>' +
+    '<div class="choix" role="radiogroup" aria-label="Ce que tu partages">' +
+      choix('reprise', 'Toute la reprise', 'La fiche mémo : le tracé et les ' + NB_NOTEES + ' figures') +
+      choix('figure', 'La figure ' + f.n, f.lettres + ' · ' + f.court) +
+    '</div>' +
+    '<div class="segments deux" role="group" aria-label="Fond de l\'image">' + fond('sombre', 'Fond sombre') + fond('clair', 'Fond clair') + '</div>' +
+    '<figure class="apercu"><img id="partage-apercu" alt="" hidden><div class="attente" id="partage-attente">Préparation de l\'image…</div></figure>' +
+    '<button type="button" class="btn btn-principal" data-action="partage-envoyer" id="partage-envoyer" disabled>' + I.partager + (partageNatif() ? 'Partager l\'image' : 'Télécharger l\'image') + '</button>' +
+    '<p class="discret">Une image de 1080 × 1920, faite sur cet appareil : rien n\'est envoyé ailleurs.</p>' +
+  '</div>';
+}
+
+async function preparerImage() {
+  const jeton = ++PART.jeton;
+  PART.blob = null;
+  try {
+    const blob = await imageAPartager(PART.quoi, figureCourante(), PART.fond);
+    if (jeton !== PART.jeton) return; // un autre choix entre-temps : sa propre image arrive
+    PART.blob = blob;
+    if (PART.url) URL.revokeObjectURL(PART.url);
+    PART.url = URL.createObjectURL(blob);
+    const img = document.getElementById('partage-apercu'), attente = document.getElementById('partage-attente');
+    if (!img) return;
+    img.src = PART.url;
+    img.alt = PART.quoi === 'figure' ? 'Aperçu : la carte de la figure ' + figureCourante().n : 'Aperçu : la fiche mémo de la reprise';
+    img.hidden = false;
+    attente.hidden = true;
+    document.getElementById('partage-envoyer').disabled = false;
+  } catch (e) {
+    const attente = document.getElementById('partage-attente');
+    if (attente && jeton === PART.jeton) attente.textContent = 'L\'image n\'a pas pu être faite sur cet appareil.';
+  }
+}
+
+function envoyerPartage() {
+  if (!PART.blob) return;
+  const nom = nomFichier(), fichier = new File([PART.blob], nom, { type: 'image/png' });
+  if (partageNatif() && navigator.canShare({ files: [fichier] })) {
+    navigator.share({ files: [fichier], title: P.titre }).catch(() => { /* partage annulé : rien à faire */ });
+    return;
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(PART.blob);
+  a.download = nom;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
 
 // appli/js/deviner.js
@@ -1408,6 +1747,12 @@ const ACTIONS = {
   // La carrière en grand, et retour : même écran, la lecture continue.
   agrandir: () => { R.grand = true; regarder(); },
   reduire: () => { R.grand = false; regarder(); },
+  // Partager le parcours (partage.js).
+  partager: ouvrirPartage,
+  'partage-fermer': () => feuille.close(),
+  'partage-quoi': (b) => { PART.quoi = b.dataset.q; rendrePartage(); preparerImage(); },
+  'partage-fond': (b) => { PART.fond = b.dataset.f; rendrePartage(); preparerImage(); },
+  'partage-envoyer': envoyerPartage,
   lettre: (b) => repondre(b.dataset.l),
   indice: () => { Q.indice = true; dessinerQuiz(); },
   'question-suivante': questionSuivante,
@@ -1425,9 +1770,9 @@ document.addEventListener('click', (e) => {
   const f = ACTIONS[b.dataset.action];
   if (f) { e.preventDefault(); f(b); }
 });
-// Sur ordinateur, Échap quitte la vue en grand.
+// Sur ordinateur, Échap quitte la vue en grand (sauf si une fenêtre est ouverte : Échap la ferme d'abord).
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && R.grand && document.querySelector('.regarder.grand')) ACTIONS.reduire();
+  if (e.key === 'Escape' && R.grand && document.querySelector('.regarder.grand') && !document.querySelector('dialog[open]')) ACTIONS.reduire();
 });
 app.addEventListener('input', (e) => {
   const el = e.target;
